@@ -134,6 +134,23 @@ class AcquisitionOffset:
 
 
 @dataclass(frozen=True)
+class BeamSource:
+    """
+    Where an area selector finds the beam its preview is acquired with.
+
+    Attributes:
+        path: Dotted path to a `BeamType`. Resolved against the settings
+            declaring the hint, then outward toward the form root.
+        via: Name of a field holding the name of another action. If set, `path`
+            is resolved in that action's settings instead, e.g. for a refocus,
+            which images with the beam of its linked imaging.
+    """
+
+    path: str
+    via: str | None = None
+
+
+@dataclass(frozen=True)
 class CropSource:
     """
     Where an area selector finds the scanning area its preview is cropped to.
@@ -163,8 +180,8 @@ class FormHint:
     min_areas: int | None = None
     action_type_filter: list[type[Action]] = field(default_factory=list)
     overlays: tuple[OverlaySpec, ...] = ()
-    # field name feeding the beam source
-    beam_source: str | None = None
+    # tried in order; the first that resolves to a beam decides
+    beam_sources: tuple[BeamSource, ...] = ()
     offset: AcquisitionOffset | None = None
     # tried in order; the first that resolves to a list decides, even an empty one
     crop_sources: tuple[CropSource, ...] = ()

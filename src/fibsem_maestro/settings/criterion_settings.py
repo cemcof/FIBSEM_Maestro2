@@ -13,6 +13,7 @@ from fibsem_maestro.settings.base_settings import BaseSettings
 from fibsem_maestro.settings.form_utils import (
     AcquisitionOffset,
     AreaOverlay,
+    BeamSource,
     CropSource,
     FieldUnit,
     FormHint,
@@ -130,7 +131,12 @@ class CriterionSettings(BaseSettings):
             widget=WidgetType.AREA_SELECT,
             min_areas=1,
             max_areas=1,
-            beam_source="beam_type",
+            # a refocus has no beam of its own: it images with the beam of
+            # its linked imaging
+            beam_sources=(
+                BeamSource("beam_type"),
+                BeamSource("beam_type", via="linked_imaging"),
+            ),
             offset=AcquisitionOffset(source="mode.delta_x"),
             # imaging and the basic and line autofocus modes scan their own
             # area; step mode scores the frames of its linked imaging

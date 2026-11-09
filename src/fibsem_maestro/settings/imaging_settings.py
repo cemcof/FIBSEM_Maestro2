@@ -10,7 +10,12 @@ from fibsem_maestro.core.beam_type import BeamType
 from fibsem_maestro.core.frequency import Every, Frequency
 from fibsem_maestro.settings.base_settings import BaseSettings
 from fibsem_maestro.settings.criterion_settings import CriterionSettings
-from fibsem_maestro.settings.form_utils import FieldUnit, FormHint, WidgetType
+from fibsem_maestro.settings.form_utils import (
+    BeamSource,
+    FieldUnit,
+    FormHint,
+    WidgetType,
+)
 from fibsem_maestro.settings.property_names import PropertyNames
 
 
@@ -39,7 +44,11 @@ ResolutionMode = Annotated[
 class ImagingSettings(BaseSettings):
     scanning_area: Annotated[
         list[RelativeArea],
-        FormHint(widget=WidgetType.AREA_SELECT, max_areas=1, beam_source="beam_type"),
+        FormHint(
+            widget=WidgetType.AREA_SELECT,
+            max_areas=1,
+            beam_sources=(BeamSource("beam_type"),),
+        ),
     ] = Field(
         default_factory=list,
         description="Area that should be imaged.",

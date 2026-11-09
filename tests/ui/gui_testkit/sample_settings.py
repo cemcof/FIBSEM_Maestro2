@@ -32,6 +32,7 @@ from fibsem_maestro.settings.base_settings import BaseSettings
 from fibsem_maestro.settings.form_utils import (
     AcquisitionOffset,
     AreaOverlay,
+    BeamSource,
     CropSource,
     FieldUnit,
     FormHint,
@@ -321,7 +322,9 @@ class RequiredLink(BaseSettings):
 class PreviewSettings(BaseSettings):
     """An area selector using every preview context provider (beam, offset, crop)."""
 
-    beam: BeamType = Field(default=BeamType.ION, description="Beam to image with.")
+    beam: BeamType | None = Field(
+        default=BeamType.ION, description="Beam to image with; None for the linked one."
+    )
     offset_x: Annotated[float, FieldUnit(suffix="nm")] = Field(
         default=0.0, description="Shift while imaging."
     )
@@ -335,7 +338,8 @@ class PreviewSettings(BaseSettings):
             widget=WidgetType.AREA_SELECT,
             min_areas=1,
             max_areas=2,
-            beam_source="beam",
+            # its own beam decides first, then that of a linked action
+            beam_sources=(BeamSource("beam"), BeamSource("beam", via="linked")),
             offset=AcquisitionOffset(source="offset_x"),
             # a linked action decides first; its frames have no offset
             crop_sources=(

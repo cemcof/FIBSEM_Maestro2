@@ -15,6 +15,7 @@ from fibsem_maestro.settings.base_settings import BaseSettings
 from fibsem_maestro.settings.criterion_settings import CriterionSettings
 from fibsem_maestro.settings.form_utils import (
     AcquisitionOffset,
+    BeamSource,
     FieldUnit,
     FormHint,
     NestedUnion,
@@ -34,7 +35,12 @@ ScanningArea = Annotated[
     FormHint(
         widget=WidgetType.AREA_SELECT,
         max_areas=1,
-        beam_source="beam_type",
+        # a refocus has no beam of its own: it images with the beam of its
+        # linked imaging
+        beam_sources=(
+            BeamSource("beam_type"),
+            BeamSource("beam_type", via="linked_imaging"),
+        ),
         offset=AcquisitionOffset(source="mode.delta_x"),
     ),
 ]

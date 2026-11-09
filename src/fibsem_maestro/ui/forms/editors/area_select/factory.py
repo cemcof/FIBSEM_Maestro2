@@ -5,21 +5,19 @@
 
 from __future__ import annotations
 
-from functools import partial
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from fibsem_maestro.core.beam_type import BeamType
 from fibsem_maestro.settings.reactive import ReactiveNode
 from fibsem_maestro.ui.forms.editors.area_select.stale_watch import StaleImageWatch
 from fibsem_maestro.ui.forms.editors.area_select.widget import AreaSelectWidget
 from fibsem_maestro.ui.forms.registry import optional_wrap
-from fibsem_maestro.ui.forms.scope import resolve_beam
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from fibsem_maestro.core.area import RelativeArea
-    from fibsem_maestro.core.beam_type import BeamType
-    from fibsem_maestro.settings.form_utils import CropSource
+    from fibsem_maestro.settings.form_utils import BeamSource, CropSource
     from fibsem_maestro.ui.forms.editor import FieldEditor
     from fibsem_maestro.ui.forms.registry import EditorRequest
     from fibsem_maestro.ui.forms.scope import BuildScope
@@ -66,14 +64,18 @@ def create_area_select(request: EditorRequest) -> FieldEditor[Any]:
     ctx = request.ctx
 
     beam_provider: Callable[[], BeamType | None] | None = None
-    if beam_source := hint.beam_source:
+    if hint.beam_sources:
         if not scope.is_live:
             ctx.warn(
-                f"Field {fi.name!r} requests beam {beam_source!r} but "
-                "is not bound to live settings; the active beam is used."
+                f"Field {fi.name!r} declares beam sources but is not bound to "
+                "live settings; the active beam is used."
             )
         else:
-            beam_provider = partial(resolve_beam, scope, beam_source)
+            beam_sources = hint.beam_sources
+
+            def beam_provider() -> BeamType | None:
+                """The beam to acquire the preview with, or None for the active one."""
+                return _resolve_beam(scope, beam_sources, ctx.actions)
 
     crop_sources: tuple[CropSource, ...] = ()
     crop_provider: Callable[[], RelativeArea | None] | None = None
@@ -130,6 +132,36 @@ def create_area_select(request: EditorRequest) -> FieldEditor[Any]:
     return optional_wrap(area, request, inline=True)
 
 
+def _resolve_beam(
+    scope: BuildScope,
+    sources: tuple[BeamSource, ...],
+    actions: ActionCatalog | None,
+) -> BeamType | None:
+    """
+    Find the beam an area selector's preview is acquired with.
+
+    Sources are tried in order against the live settings; the first that
+    resolves to a beam decides.
+
+    Args:
+        scope: The scope of the area selector's field.
+        sources: The field's beam sources.
+        actions: The workflow's actions, for sources reached through a link.
+
+    Returns:
+        The beam, or None if no source resolves (the active beam is used).
+    """
+    for source in sources:
+        if source.via is None:
+            beam = scope.value(source.path, BeamType)
+        else:
+            beam = _linked_value(scope, actions, source.via, source.path, BeamType)
+
+        if beam is not None:
+            return beam
+    return None
+
+
 def _resolve_crop(
     scope: BuildScope,
     sources: tuple[CropSource, ...],
@@ -153,16 +185,20 @@ def _resolve_crop(
         if source.via is None:
             areas = scope.value(source.path, list)
         else:
-            areas = _linked_value(scope, actions, source.via, source.path)
+            areas = _linked_value(scope, actions, source.via, source.path, list)
 
         if areas is not None:
             return _Crop(areas[0] if areas else None, source.via is not None)
     return _Crop(None, False)
 
 
-def _linked_value(
-    scope: BuildScope, actions: ActionCatalog | None, via: str, path: str
-) -> list[Any] | None:
+def _linked_value[T](
+    scope: BuildScope,
+    actions: ActionCatalog | None,
+    via: str,
+    path: str,
+    kind: type[T],
+) -> T | None:
     """
     Resolve a path in the settings of the action a link field names.
 
@@ -171,9 +207,11 @@ def _linked_value(
         actions: The workflow's actions; None outside a workflow.
         via: Path to the field holding the linked action's name.
         path: Path to resolve in that action's settings.
+        kind: Required type of the resolved value.
 
     Returns:
-        The list found there, or None if the link or the path does not resolve.
+        The value of type `kind` found there, or None if the link or the path
+        does not resolve.
     """
     if actions is None or (name := scope.value(via, str)) is None:
         return None
@@ -182,4 +220,4 @@ def _linked_value(
     if action is None:
         return None
 
-    return scope.rebased(action.settings).value(path, list)
+    return scope.rebased(action.settings).value(path, kind)

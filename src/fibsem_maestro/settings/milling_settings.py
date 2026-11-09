@@ -13,6 +13,7 @@ from fibsem_maestro.core.pattern_type import PatternType
 from fibsem_maestro.settings.base_settings import BaseSettings
 from fibsem_maestro.settings.form_utils import (
     AreaOverlay,
+    BeamSource,
     FieldUnit,
     FormHint,
     OverlaySpec,
@@ -38,7 +39,7 @@ class MillingSettings(BaseSettings):
                     direction="milling_direction",
                 ),
             ),
-            beam_source="beam_type",
+            beam_sources=(BeamSource("beam_type"),),
         ),
     ] = Field(
         default_factory=list,

@@ -29,6 +29,8 @@ from fibsem_maestro.core.area import RelativeArea
 from fibsem_maestro.core.beam_type import BeamType
 from fibsem_maestro.core.image import Image
 from fibsem_maestro.core.point import RelativePoint
+from fibsem_maestro.settings.imaging_settings import ImagingSettings
+from fibsem_maestro.settings.refocus_settings import RefocusSettings
 from fibsem_maestro.ui.forms.context import FormContext
 from fibsem_maestro.ui.ports import PreviewRequest
 
@@ -46,6 +48,14 @@ NOT_CONNECTED = "Acquisition failed: FIBSEM Maestro is not connected to a micros
 
 CORNER = RelativeArea(origin=RelativePoint(x=0.0, y=0.0), width=0.2, height=0.2)
 """A small area in the top-left corner, leaving the rest of the frame free."""
+
+
+@dataclass
+class LinkedImagingStandIn:
+    """What a beam source reached through a link reads of an imaging: its name and settings."""
+
+    name: str
+    settings: ImagingSettings
 
 
 @dataclass
@@ -171,6 +181,55 @@ def test_load_crops_to_the_linked_action_without_offset(
     assert previews.requests[-1].offset_x_nm == 0.0
 
 
+@pytest.mark.parametrize(
+    ("own", "linked_beam", "expected"),
+    [
+        # its own beam decides first
+        (BeamType.ION, BeamType.ELECTRON, BeamType.ION),
+        # without one, the linked action's
+        (None, BeamType.ELECTRON, BeamType.ELECTRON),
+        # with neither, the active beam
+        (None, None, None),
+    ],
+)
+def test_load_requests_its_own_beam_else_the_linked_actions(
+    area_of: Callable[..., tuple[Form, FieldEditor[Any]]],
+    previews: FakePreviews,
+    links: FakeCatalog,
+    own: BeamType | None,
+    linked_beam: BeamType | None,
+    expected: BeamType | None,
+) -> None:
+    linked = LinkedActionStandIn("source", PreviewSettings(beam=linked_beam))
+    links.replace([cast("Action", linked)])
+    _, area = area_of(PreviewSettings(beam=own, linked="source"))
+
+    _load(area)
+
+    assert previews.requests[-1].beam == expected
+
+
+def test_load_requests_the_beam_of_a_refocus_s_linked_imaging(
+    live_form: Callable[..., Form],
+    preview_context: FormContext,
+    previews: FakePreviews,
+    links: FakeCatalog,
+) -> None:
+    imaging = LinkedImagingStandIn("imaging", ImagingSettings(beam_type=BeamType.ION))
+    links.replace([cast("Action", imaging)])
+    settings = RefocusSettings(linked_imaging="imaging")
+    assert settings.beam_type is None
+    form = live_form(settings, ctx=preview_context)
+
+    for path in ("mode.scanning_area", "mode.criterion.area"):
+        _load(editor_at(form.widget, path))
+
+    assert [request.beam for request in previews.requests] == [
+        BeamType.ION,
+        BeamType.ION,
+    ]
+
+
 def test_delivered_image_is_shown(
     area_of: Callable[..., tuple[Form, FieldEditor[Any]]], previews: FakePreviews
 ) -> None:
@@ -270,8 +329,8 @@ def test_detached_area_selector_warns_that_its_context_cannot_be_resolved(
 
     assert warnings_of(log) == [
         (
-            "Field 'area' requests beam 'beam' but is not bound to live settings; "
-            "the active beam is used."
+            "Field 'area' declares beam sources but is not bound to live "
+            "settings; the active beam is used."
         ),
         (
             "Field 'area' declares crop sources but is not bound to live settings; "

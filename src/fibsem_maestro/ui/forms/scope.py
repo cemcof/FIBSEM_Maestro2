@@ -8,8 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from fibsem_maestro.core.beam_type import BeamType
-
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -245,18 +243,3 @@ class BuildScope:
             if isinstance(current, kind):
                 return current
         return None
-
-
-def resolve_beam(scope: BuildScope, path: str) -> BeamType | None:
-    """
-    Look up a beam on the innermost enclosing live object that defines it.
-
-    Args:
-        scope: The scope of the field requesting a beam.
-        path: Dotted attribute path relative to a live object, e.g. `"beam_type"`
-            or `"imaging.beam_type"`.
-
-    Returns:
-        The first beam found, or None if no enclosing object defines one.
-    """
-    return scope.value(path, BeamType)

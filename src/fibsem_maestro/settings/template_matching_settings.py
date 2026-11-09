@@ -9,6 +9,7 @@ from fibsem_maestro.core.area import RelativeArea
 from fibsem_maestro.settings.base_settings import BaseSettings
 from fibsem_maestro.settings.form_utils import (
     AreaOverlay,
+    BeamSource,
     FieldUnit,
     FormHint,
     OverlaySpec,
@@ -91,7 +92,7 @@ class TemplateMatchingSettings(BaseSettings):
             overlays=(
                 OverlaySpec.of(AreaOverlay.SHOW_MARGIN, margin_nm="correction_margin"),
             ),
-            beam_source="beam_type",
+            beam_sources=(BeamSource("beam_type"),),
         ),
     ] = Field(
         default_factory=list,
