@@ -26,6 +26,14 @@ T = TypeVar("T")
 _ISSUE_COLORS = {Severity.ERROR: "#e05252", Severity.WARNING: "#e0a030"}
 """Text colour of a field's label and message, by the most severe issue."""
 
+RESETS_STATE_MARK = "\u21ba"
+"""Shown after the label of a field whose change resets the action's internal state."""
+
+RESETS_STATE_NOTE = "Changing this resets the action's internal state."
+"""Added to the tooltip of a field whose change resets the action's internal state."""
+
+_RESETS_STATE_COLOR = "#e0a030"
+
 
 @dataclass(frozen=True)
 class _FieldRow:
@@ -107,7 +115,12 @@ class ObjectWidget(QWidget, FieldEditor[T]):
         self._row_count = 0
 
     def add_field(
-        self, name: str, label: str, widget: FieldEditor[Any], description: str = ""
+        self,
+        name: str,
+        label: str,
+        widget: FieldEditor[Any],
+        description: str = "",
+        resets_state: bool = False,
     ) -> None:
         """
         Add a labelled field row to the form.
@@ -117,6 +130,8 @@ class ObjectWidget(QWidget, FieldEditor[T]):
             label: The text shown in the field's label.
             widget: The editor widget for the field's value.
             description: Optional tooltip text for the label.
+            resets_state: The field's change resets the action's internal
+                state: its label is marked and its tooltip says so.
         """
 
         label_widget = FieldLabel(label, widget.highlight_target())
@@ -124,6 +139,13 @@ class ObjectWidget(QWidget, FieldEditor[T]):
         label_widget.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
+        if resets_state:
+            label_widget.setTextFormat(Qt.TextFormat.RichText)
+            label_widget.setText(
+                f"{escape(label)} "
+                f'<span style="color: {_RESETS_STATE_COLOR};">{RESETS_STATE_MARK}</span>'
+            )
+            description = "\n\n".join(filter(None, (description, RESETS_STATE_NOTE)))
         if description:
             label_widget.setToolTip(description)
 

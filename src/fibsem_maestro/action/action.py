@@ -106,6 +106,16 @@ class Action[TSettings: ActionSettingsLike, TState: ActionState](ABC):
         """
         raise NotImplementedError(f"state_cls not implemented for {cls.__name__}")
 
+    @classmethod
+    def state_fields(cls) -> frozenset[str]:
+        """
+        Names of the top-level settings fields whose change resets the internal state.
+
+        Returns:
+            The field names; empty if no settings change resets the state.
+        """
+        return cls._STATE_FIELDS
+
     @final
     @with_logging_context
     def prepare(self) -> None:
@@ -459,6 +469,24 @@ class Action[TSettings: ActionSettingsLike, TState: ActionState](ABC):
         others = [action for action in self._actions if action is not self]
         for action in (self, *others):
             action._on_properties_replaced(self)
+
+    def properties_would_discard_state(self, of: Action) -> bool:
+        """
+        Tell whether new properties of an action would discard this action's internal state.
+
+        Answers what `_on_properties_replaced` would do, without doing it, so
+        that the user can be asked first. False by default.
+
+        Args:
+            of: The action whose properties would be replaced (Prepare or edited
+                properties); may be this action.
+
+        Returns:
+            True if storing new properties of `of` would discard state that is
+            not the default one.
+        """
+        _ = of
+        return False
 
     def _on_properties_replaced(self, of: Action) -> None:
         """

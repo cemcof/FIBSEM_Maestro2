@@ -499,6 +499,20 @@ class WorkflowSession(QObject):
         self._write_action_settings(action)
         self.action_props_changed.emit(action)
 
+    def actions_losing_state_to(self, action: Action) -> list[Action]:
+        """
+        The actions whose internal state new properties of `action` would discard.
+
+        Args:
+            action: The action whose properties would be stored (Prepare or
+                edited properties).
+
+        Returns:
+            The actions, in workflow order; `action` itself included if it is
+            one of them.
+        """
+        return [a for a in self.actions if a.properties_would_discard_state(action)]
+
     def reset_action_state(self, action: Action) -> None:
         """
         Discard the action's internal state, and announce it.

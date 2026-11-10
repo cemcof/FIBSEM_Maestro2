@@ -31,6 +31,9 @@ class FormContext:
         state: Returns the current internal state of the action whose settings
             the form edits, for overlays drawn from it
             (`OverlaySpec.state_sources`); None outside an action's panel.
+        state_fields: Top-level fields of the root object whose change resets
+            the internal state of that action (`Action.state_fields`); their
+            labels are marked.
     """
 
     log: TextLogger | None = None
@@ -40,6 +43,7 @@ class FormContext:
     previews: PreviewPort | None = None
     preview_permission: PreviewPermission | None = None
     state: Callable[[], object] | None = None
+    state_fields: frozenset[str] = frozenset()
 
     def choice_context(self) -> ChoiceContext:
         """The parts `choices_for` needs."""

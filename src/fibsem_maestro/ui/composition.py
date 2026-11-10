@@ -69,8 +69,8 @@ class FormContexts:
 
         Args:
             action: The action whose settings are edited, for overlays drawn
-                from its internal state; None if the form edits no action's
-                settings.
+                from its internal state and the marks on the fields resetting
+                it; None if the form edits no action's settings.
         """
         return FormContext(
             log=self._session.text_logger(),
@@ -80,6 +80,7 @@ class FormContexts:
             previews=self._previews,
             preview_permission=self._permission,
             state=(lambda: action.state) if action is not None else None,
+            state_fields=action.state_fields() if action is not None else frozenset(),
         )
 
     def for_properties(self, action: Action) -> FormContext:

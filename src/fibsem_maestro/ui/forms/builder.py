@@ -407,7 +407,14 @@ class _Recursion:
             else:
                 editor = self._create(fi, None, on_change, field_scope)
 
-            obj.add_field(fi.name, fi.label, editor, fi.description)
+            obj.add_field(
+                fi.name,
+                fi.label,
+                editor,
+                fi.description,
+                # only the action's own top-level fields define its state
+                resets_state=scope.path == () and fi.name in context.form.state_fields,
+            )
             editor.on_issues_changed(context.notify_issues_changed)
             editors[fi.name] = editor
             if (path := field_scope.dotted) is not None:

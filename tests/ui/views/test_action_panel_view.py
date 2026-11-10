@@ -24,6 +24,7 @@ from gui_testkit.driving import (
     press,
     task_running,
 )
+from gui_testkit.forms import children
 from gui_testkit.workflows import simulated_workflow
 from PyQt6.QtWidgets import QDialogButtonBox, QLabel, QMessageBox, QWidget
 
@@ -48,6 +49,9 @@ from fibsem_maestro.ui.app.files import WorkflowFiles
 from fibsem_maestro.ui.app.run_state import AppState
 from fibsem_maestro.ui.app.session import WorkflowSession
 from fibsem_maestro.ui.forms.editors.area_select.widget import AreaSelectWidget
+from fibsem_maestro.ui.forms.editors.field_label import FieldLabel
+from fibsem_maestro.ui.forms.editors.object import RESETS_STATE_MARK
+from fibsem_maestro.ui.schema.labels import field_name_to_label
 from fibsem_maestro.ui.views.action_panel.header import action_header_view
 from fibsem_maestro.ui.widgets.icons import ICON_TEST
 from fibsem_maestro.ui.widgets.properties_dialog import PropertiesDialog
@@ -512,3 +516,108 @@ def test_action_panel_slice_overlay_follows_the_milling_progress(
 
     panel_of(app, milling).header.reset_button.click()
     assert pushed[-1] == 0
+
+
+def test_action_panel_marks_the_settings_resetting_the_state(app: Composition) -> None:
+    milling = app.commands.add_action("milling", "milling")
+    shown(app, milling)
+
+    marked = {
+        label.text().split(" <")[0]
+        for label in children(panel_of(app, milling).form.widget, FieldLabel)
+        if RESETS_STATE_MARK in label.text()
+    }
+
+    assert marked == {field_name_to_label(name) for name in milling.state_fields()}
+
+
+@pytest.fixture
+def losing_state(
+    app: Composition, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Action, Action]:
+    """A prepared action, and another whose state its new props would discard."""
+    target = app.commands.add_action(ANY_TYPE, "target")
+    victim = app.commands.add_action(ANY_TYPE, "victim")
+    monkeypatch.setattr(
+        victim, "properties_would_discard_state", lambda of: of is target
+    )
+    shown(app, target)
+    return target, victim
+
+
+def test_action_panel_prepare_asks_before_resetting_the_state_of_actions(
+    qtbot: QtBot,
+    app: Composition,
+    boxes: MessageBoxes,
+    losing_state: tuple[Action, Action],
+) -> None:
+    target, _ = losing_state
+
+    boxes.answer = QMessageBox.StandardButton.Cancel
+    click_tool(app, target, "prepare")
+    assert not app.tasks.busy
+    assert not target.has_stored_properties()
+    assert boxes.titles() == ["Reset state"]
+    assert "'victim'" in boxes.texts()[0]
+
+    boxes.answer = QMessageBox.StandardButton.Yes
+    click_tool(app, target, "prepare")
+    qtbot.waitUntil(lambda: not app.tasks.busy, timeout=TIMEOUT_MS)
+    assert target.has_stored_properties()
+
+
+def test_action_panel_prepare_does_not_ask_in_danger_mode(
+    qtbot: QtBot,
+    app: Composition,
+    boxes: MessageBoxes,
+    losing_state: tuple[Action, Action],
+) -> None:
+    target, _ = losing_state
+    app.commands.set_danger_mode(True)
+
+    click_tool(app, target, "prepare")
+    qtbot.waitUntil(lambda: not app.tasks.busy, timeout=TIMEOUT_MS)
+
+    assert boxes.calls == []
+    assert target.has_stored_properties()
+
+
+def test_action_panel_prepare_does_not_ask_when_no_state_is_lost(
+    qtbot: QtBot, app: Composition, boxes: MessageBoxes
+) -> None:
+    # e.g. before the first slice: no action has any state
+    action = app.commands.add_action(ANY_TYPE, "first")
+
+    prepare_with_tool(qtbot, app, action)
+
+    assert boxes.calls == []
+
+
+def test_action_panel_edit_asks_before_saving_props_resetting_the_state(
+    qtbot: QtBot,
+    app: Composition,
+    boxes: MessageBoxes,
+    losing_state: tuple[Action, Action],
+) -> None:
+    target, _ = losing_state
+    boxes.answer = QMessageBox.StandardButton.Yes
+    prepare_with_tool(qtbot, app, target)
+    boxes.calls.clear()
+
+    def save(dialog: PropertiesDialog) -> None:
+        press(dialog, QDialogButtonBox.StandardButton.Save)
+
+    boxes.answer = QMessageBox.StandardButton.Cancel
+    with (
+        qtbot.assertNotEmitted(app.session.action_props_changed),
+        answering(PropertiesDialog, save),
+    ):
+        click_tool(app, target, "edit")
+    assert boxes.titles() == ["Reset state"]
+
+    boxes.answer = QMessageBox.StandardButton.Yes
+    with (
+        qtbot.waitSignal(app.session.action_props_changed),
+        answering(PropertiesDialog, save),
+    ):
+        click_tool(app, target, "edit")

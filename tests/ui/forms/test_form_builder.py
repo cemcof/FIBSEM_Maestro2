@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -32,7 +33,11 @@ from PyQt6 import sip
 from fibsem_maestro.core.image import Image
 from fibsem_maestro.ui.forms.context import FormContext
 from fibsem_maestro.ui.forms.editors.field_label import FieldLabel
-from fibsem_maestro.ui.forms.editors.object import ObjectWidget
+from fibsem_maestro.ui.forms.editors.object import (
+    RESETS_STATE_MARK,
+    RESETS_STATE_NOTE,
+    ObjectWidget,
+)
 from fibsem_maestro.ui.forms.editors.union import DiscriminatedUnionWidget
 from fibsem_maestro.ui.schema.schema import get_field_infos
 
@@ -118,6 +123,31 @@ def test_form_rows_follow_declaration_order_with_labels_and_tooltips(
         (fi.name.replace("_", " "), fi.description)
         for fi in get_field_infos(KitchenSink)
     ]
+
+
+def test_form_marks_the_top_level_fields_resetting_the_state(
+    live_form: Callable[..., Form], sink_context: FormContext
+) -> None:
+    ctx = dataclasses.replace(sink_context, state_fields=frozenset({"count", "leaf"}))
+
+    form = live_form(KitchenSink(), ctx=ctx)
+
+    rows = {
+        fi.name: row
+        for fi, row in zip(get_field_infos(KitchenSink), _row_labels(form.widget))
+    }
+    marked = {name for name, (text, _) in rows.items() if RESETS_STATE_MARK in text}
+    assert marked == {"count", "leaf"}
+    text, tooltip = rows["count"]
+    assert text.startswith("count ")
+    assert (
+        tooltip
+        == f"{KitchenSink.model_fields['count'].description}\n\n{RESETS_STATE_NOTE}"
+    )
+    # a nested field of the same name defines nothing
+    leaf = editor_at(form.widget, "leaf").value_editor()
+    assert isinstance(leaf, ObjectWidget)
+    assert all(RESETS_STATE_MARK not in text for text, _ in _row_labels(leaf))
 
 
 def test_form_field_subset_keeps_declaration_order(

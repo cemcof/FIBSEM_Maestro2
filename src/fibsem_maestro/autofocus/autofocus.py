@@ -499,6 +499,22 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
         self._trial_target = None
         super().reset()
 
+    def properties_would_discard_state(self, of: Action) -> bool:
+        """
+        Tell whether new properties of an action would abort the step-mode run in progress.
+
+        Args:
+            of: The action whose properties would be replaced.
+
+        Returns:
+            True while a step-mode run is in progress and `of` is this
+            autofocus or the imaging the run puts its trial values into.
+        """
+        if self._active_gen is None:
+            return False
+        target = self._trial_target
+        return of is self or (target is not None and of is target.imaging)
+
     def _on_properties_replaced(self, of: Action) -> None:
         """
         Abort a step-mode run when its own properties or its imaging's are replaced.
@@ -513,19 +529,14 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
         Args:
             of: The action whose properties were replaced.
         """
-        if self._active_gen is None:
-            return
-
-        target = self._trial_target
-        own = of is self
-        if not own and (target is None or of is not target.imaging):
+        if not self.properties_would_discard_state(of):
             return
 
         self._ctx.text_logger.info(
             f"Aborting the step-mode run of '{self.name}': new properties of "
             f"'{of.name}' were stored."
         )
-        if own:
+        if of is self:
             self._restore_imaging()
         self._abort_sweep()
         self._ctx.state_store.write("state.yaml", self.state)

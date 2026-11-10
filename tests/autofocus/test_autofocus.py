@@ -541,3 +541,20 @@ def test_workflow_reset_leaves_the_imaging_props_alone(
 
     assert not autofocus.run_in_progress
     assert imaging.read_properties() == before
+
+
+def test_step_autofocus_tells_whose_new_properties_would_abort_its_run(
+    running: tuple[Action, Autofocus],
+    add_action: Callable[..., Action],
+) -> None:
+    imaging, autofocus = running
+    other = add_action("imaging", "other")
+
+    assert autofocus.properties_would_discard_state(autofocus)
+    assert autofocus.properties_would_discard_state(imaging)
+    assert not autofocus.properties_would_discard_state(other)
+
+    autofocus.replace_properties(autofocus.read_properties())
+
+    # nothing left to discard
+    assert not autofocus.properties_would_discard_state(imaging)

@@ -273,5 +273,6 @@ class ActionPanel(QWidget):
                 form_context=self._form_contexts.for_properties(self._action),
                 parent=self,
                 refresh=self._render_header,
+                policy=self._policy,
             )
         )

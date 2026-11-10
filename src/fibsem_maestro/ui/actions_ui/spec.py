@@ -55,6 +55,8 @@ class ToolContext:
         parent: Parent widget for dialogs.
         refresh: Re-renders the header; for a tool that finds a precondition
             gone that changed without any signal (e.g. a deleted props file).
+        policy: The permissions and danger mode, e.g. to skip a confirmation
+            in danger mode.
     """
 
     action: Action
@@ -64,6 +66,7 @@ class ToolContext:
     form_context: FormContext
     parent: QWidget
     refresh: Callable[[], None]
+    policy: EditPolicy
 
 
 @dataclass(frozen=True)

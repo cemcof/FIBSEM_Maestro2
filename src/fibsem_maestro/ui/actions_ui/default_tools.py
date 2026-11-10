@@ -16,14 +16,44 @@ from fibsem_maestro.ui.widgets.icons import (
 from fibsem_maestro.ui.widgets.properties_dialog import PropertiesDialog
 
 
+def confirm_state_loss(ctx: ToolContext) -> bool:
+    """
+    Ask before new properties of the action discard the internal state of actions.
+
+    Nobody is asked if no action would lose state (e.g. before the first
+    slice), or in danger mode.
+
+    Args:
+        ctx: The tool's context.
+
+    Returns:
+        True if the properties may be stored.
+    """
+    losing = ctx.session.actions_losing_state_to(ctx.action)
+    if not losing or ctx.policy.danger_mode:
+        return True
+
+    names = ", ".join(f"'{action.name}'" for action in losing)
+    answer = QMessageBox.question(
+        ctx.parent,
+        "Reset state",
+        f"New properties of '{ctx.action.name}' reset the internal state of "
+        f"{names}.\n\nContinue?",
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        QMessageBox.StandardButton.Cancel,
+    )
+    return answer == QMessageBox.StandardButton.Yes
+
+
 def prepare(ctx: ToolContext) -> None:
     """
-    Prepare the action on the microscope task thread.
+    Prepare the action on the microscope task thread, after confirming any state loss.
 
     Args:
         ctx: The tool's context.
     """
-    ctx.commands.prepare_action(ctx.action)
+    if confirm_state_loss(ctx):
+        ctx.commands.prepare_action(ctx.action)
 
 
 def edit_properties(ctx: ToolContext) -> None:
@@ -33,7 +63,9 @@ def edit_properties(ctx: ToolContext) -> None:
     In danger mode this works while the workflow runs. If the stored props
     change before the user saves (the workflow executed the action, or
     propagated to it), the edits are not saved and the user is told so.
-    Other failures to read or save are logged on the action's logger.
+    Saving asks first if the new props reset the internal state of an action
+    (`confirm_state_loss`). Other failures to read or save are logged on the
+    action's logger.
 
     Args:
         ctx: The tool's context.
@@ -62,11 +94,12 @@ def edit_properties(ctx: ToolContext) -> None:
         title=f"Properties of '{action.name}'",
         hint=(
             f"Properties stored for slice {opened_slice}. "
-            "Edit them if needed, then save."
+            "Edit them if needed, then save. If they change before you save, "
+            "the edits are not saved."
         ),
         parent=ctx.parent,
     )
-    if edited is None:
+    if edited is None or not confirm_state_loss(ctx):
         return
 
     try:
