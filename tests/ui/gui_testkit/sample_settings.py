@@ -350,6 +350,46 @@ class PreviewSettings(BaseSettings):
     ] = Field(default_factory=lambda: [QUARTER], description="Area that is used.")
 
 
+class SlicedArea(BaseSettings):
+    """An area selector drawing slices, with the next one taken from the action's state."""
+
+    slice_distance: Annotated[float, FieldUnit(suffix="nm")] = Field(
+        default=10.0, description="Distance between slices."
+    )
+    direction: Direction = Field(default=Direction.DOWN, description="Where to go.")
+    area: Annotated[
+        list[RelativeArea],
+        FormHint(
+            widget=WidgetType.AREA_SELECT,
+            overlays=(
+                OverlaySpec.of(
+                    AreaOverlay.SHOW_AREA_SLICES,
+                    state={"slices_milled": "progress.done"},
+                    slice_distance_nm="slice_distance",
+                    direction="direction",
+                ),
+            ),
+        ),
+    ] = Field(default_factory=lambda: [QUARTER], description="Where.")
+
+
+class ProgressOnly(BaseSettings):
+    """An area selector whose only overlay source is the action's state."""
+
+    area: Annotated[
+        list[RelativeArea],
+        FormHint(
+            widget=WidgetType.AREA_SELECT,
+            overlays=(
+                OverlaySpec.of(
+                    AreaOverlay.SHOW_AREA_SLICES,
+                    state={"slices_milled": "progress.done"},
+                ),
+            ),
+        ),
+    ] = Field(default_factory=lambda: [QUARTER], description="Where.")
+
+
 class FramedLayout(BaseSettings):
     """Union variant holding an area selector that needs an area."""
 

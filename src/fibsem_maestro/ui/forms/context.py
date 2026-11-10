@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 from fibsem_maestro.ui.schema.choices import ChoiceContext
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from fibsem_maestro.core.pattern_type import PatternType
     from fibsem_maestro.logging.text.text_logger import TextLogger
     from fibsem_maestro.ui.ports import ActionCatalog, PreviewPermission, PreviewPort
@@ -26,6 +28,9 @@ class FormContext:
         pattern_types: Choices of the pattern-type selector.
         previews: Acquires area-selector images; None when no microscope is connected.
         preview_permission: Whether area selectors may acquire images now.
+        state: Returns the current internal state of the action whose settings
+            the form edits, for overlays drawn from it
+            (`OverlaySpec.state_sources`); None outside an action's panel.
     """
 
     log: TextLogger | None = None
@@ -34,6 +39,7 @@ class FormContext:
     pattern_types: tuple[PatternType, ...] = ()
     previews: PreviewPort | None = None
     preview_permission: PreviewPermission | None = None
+    state: Callable[[], object] | None = None
 
     def choice_context(self) -> ChoiceContext:
         """The parts `choices_for` needs."""

@@ -102,6 +102,9 @@ class WorkflowSession(QObject):
     action_props_changed = pyqtSignal(object)
     """An `Action` whose props for its current slice were written."""
 
+    action_state_changed = pyqtSignal(object)
+    """An `Action` whose internal state was reset by the user."""
+
     rules_changed = pyqtSignal()
     """Propagation rules were added, removed or edited."""
 
@@ -495,6 +498,22 @@ class WorkflowSession(QObject):
         action.replace_properties(props)
         self._write_action_settings(action)
         self.action_props_changed.emit(action)
+
+    def reset_action_state(self, action: Action) -> None:
+        """
+        Discard the action's internal state, and announce it.
+
+        The default state is stored for the action's current slice
+        (`Action.reset_state`); settings, props and the slice are kept.
+
+        Args:
+            action: The action.
+
+        Raises:
+            Exception: Whatever the state store raises; nothing is emitted then.
+        """
+        action.reset_state()
+        self.action_state_changed.emit(action)
 
     def props_changed(self, action: Action) -> None:
         """

@@ -44,7 +44,9 @@ class AreaOverlay(Enum):
             AreaOverlay.SHOW_TILES: frozenset(
                 {"tile_size_nm", "tile_relative_overlap"}
             ),
-            AreaOverlay.SHOW_AREA_SLICES: frozenset({"slice_distance_nm", "direction"}),
+            AreaOverlay.SHOW_AREA_SLICES: frozenset(
+                {"slice_distance_nm", "direction", "slices_milled"}
+            ),
         }[self]
 
 
@@ -63,15 +65,19 @@ class OverlaySpec:
             same field.
         requires: `(dotted path, required type)` pairs that must all hold in the
             live settings for this decoration to be drawn.
-
+        state_sources: `(OverlayData attribute, dotted path)` pairs read from
+            the internal state of the action whose settings the form edits
+            (e.g. how far a milling has progressed). Outside an action's
+            panel, or for an unresolved path, the attribute is None.
     """
 
     kind: AreaOverlay
     sources: tuple[tuple[str, str], ...] = ()
     requires: tuple[tuple[str, type], ...] = ()
+    state_sources: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
-        names = [name for name, _ in self.sources]
+        names = [name for name, _ in (*self.sources, *self.state_sources)]
         if unknown := set(names) - self.kind.data_fields:
             raise ValueError(
                 f"{self.kind.name} does not read {sorted(unknown)}; "
@@ -85,6 +91,7 @@ class OverlaySpec:
         cls,
         kind: AreaOverlay,
         requires: Mapping[str, type] | None = None,
+        state: Mapping[str, str] | None = None,
         **paths: str,
     ) -> OverlaySpec:
         """
@@ -94,12 +101,19 @@ class OverlaySpec:
             kind: Which decoration to draw.
             requires: Dotted path to required type, e.g.
                 `{"tiling_mode": MultiTileMode}`.
+            state: `OverlayData` attribute name to dotted path in the action's
+                internal state, e.g. `{"slices_milled": "slices_milled"}`.
             **paths: `OverlayData` attribute name to dotted field path.
 
         Returns:
             The spec.
         """
-        return cls(kind, tuple(paths.items()), tuple((requires or {}).items()))
+        return cls(
+            kind,
+            tuple(paths.items()),
+            tuple((requires or {}).items()),
+            tuple((state or {}).items()),
+        )
 
 
 @dataclass(frozen=True)

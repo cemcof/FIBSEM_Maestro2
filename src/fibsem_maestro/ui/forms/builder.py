@@ -137,6 +137,20 @@ class Form(QObject):
         """
         self._widget.set_value(value)
 
+    def refresh_overlays(self) -> None:
+        """
+        Redraw the area-selector overlays from their current sources.
+
+        For overlays drawn from the action's internal state, which changes
+        without any editor noticing (e.g. when the action ran or its state
+        was reset). Does nothing once the form is disposed.
+        """
+        if self._context.disposed:
+            return
+        for binding in self._context.overlays:
+            if binding.wired:
+                binding.push()
+
     def dispose(self) -> None:
         """
         Make the form inert and remove everything it registered outside itself. Idempotent.

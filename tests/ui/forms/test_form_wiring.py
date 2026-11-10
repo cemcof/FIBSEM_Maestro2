@@ -5,11 +5,19 @@
 
 from __future__ import annotations
 
+import dataclasses
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import pytest
 from gui_testkit.forms import editor_at, field_at, warnings_of
-from gui_testkit.sample_settings import BrokenReferences, KitchenSink, SquareShape
+from gui_testkit.sample_settings import (
+    BrokenReferences,
+    KitchenSink,
+    ProgressOnly,
+    SlicedArea,
+    SquareShape,
+)
 
 from fibsem_maestro.core.direction import Direction
 from fibsem_maestro.settings.form_utils import AreaOverlay
@@ -22,6 +30,7 @@ if TYPE_CHECKING:
 
     from fibsem_maestro.logging.text.memory import MemoryTextLogger
     from fibsem_maestro.ui.forms.builder import Form
+    from fibsem_maestro.ui.forms.context import FormContext
 
 Overlays = dict[AreaOverlay, "Mapping[str, Any]"]
 
@@ -173,3 +182,73 @@ def test_unresolved_references_are_warned_about_and_skipped(
     ]
     assert settings.mode.kind == "engine"
     assert not form.has_errors()
+
+
+@pytest.fixture
+def progress() -> SimpleNamespace:
+    """A stand-in action state: `progress.done` slices milled."""
+    return SimpleNamespace(progress=SimpleNamespace(done=2))
+
+
+@pytest.fixture
+def sliced(
+    spy: OverlaySpy,
+    live_form: Callable[..., Form],
+    sink_context: FormContext,
+    progress: SimpleNamespace,
+) -> Form:
+    _ = spy  # installed before the build
+    ctx = dataclasses.replace(sink_context, state=lambda: progress)
+    return live_form(SlicedArea(), ctx=ctx)
+
+
+def test_overlay_receives_its_value_from_the_action_state(
+    sliced: Form, spy: OverlaySpy
+) -> None:
+    assert spy.last(sliced)[AreaOverlay.SHOW_AREA_SLICES] == {
+        "slice_distance_nm": 10.0,
+        "direction": Direction.DOWN,
+        "slices_milled": 2,
+    }
+
+
+def test_refreshing_overlays_reads_the_action_state_again(
+    sliced: Form, spy: OverlaySpy, progress: SimpleNamespace
+) -> None:
+    progress.progress.done = 0
+
+    sliced.refresh_overlays()
+
+    assert spy.last(sliced)[AreaOverlay.SHOW_AREA_SLICES]["slices_milled"] == 0
+
+
+def test_disposed_form_does_not_refresh_its_overlays(
+    sliced: Form, spy: OverlaySpy
+) -> None:
+    pushes = len(spy.pushed)
+    sliced.dispose()
+
+    sliced.refresh_overlays()
+
+    assert len(spy.pushed) == pushes
+
+
+def test_overlay_state_values_are_missing_outside_an_action(
+    spy: OverlaySpy, live_form: Callable[..., Form]
+) -> None:
+    form = live_form(SlicedArea())
+
+    assert "slices_milled" not in spy.last(form)[AreaOverlay.SHOW_AREA_SLICES]
+
+
+def test_overlay_drawn_only_from_the_action_state_is_pushed(
+    spy: OverlaySpy,
+    live_form: Callable[..., Form],
+    sink_context: FormContext,
+    progress: SimpleNamespace,
+) -> None:
+    ctx = dataclasses.replace(sink_context, state=lambda: progress)
+
+    form = live_form(ProgressOnly(), ctx=ctx)
+
+    assert spy.last(form)[AreaOverlay.SHOW_AREA_SLICES] == {"slices_milled": 2}

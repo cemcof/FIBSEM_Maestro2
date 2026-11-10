@@ -21,6 +21,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from fibsem_maestro.ui.forms.issues import FieldValidationError
+from fibsem_maestro.ui.forms.scope import resolve_path
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -118,11 +119,17 @@ class OverlayBinding:
         """Stop this binding from touching its area editor."""
         self.active = False
 
+    @property
+    def reads_state(self) -> bool:
+        """True if an overlay is drawn from the action's internal state."""
+        return any(spec.state_sources for spec in self.specs)
+
     def push(self) -> None:
-        """Copy the current source values into the area editor's overlays."""
+        """Copy the current source values, and the action's state, into the area editor's overlays."""
         if not self.active:
             return
 
+        state = self._state()
         overlays: list[tuple[AreaOverlay, Mapping[str, Any]]] = []
         for spec in self.specs:
             values: dict[str, Any] = {}
@@ -131,9 +138,17 @@ class OverlayBinding:
                     source = self._resolve_source(path)
                     if source is not None:
                         values[data_field] = _shown_value(source)
+                if state is not None:
+                    for data_field, path in spec.state_sources:
+                        values[data_field] = resolve_path(state, tuple(path.split(".")))
             overlays.append((spec.kind, values))
 
         self.area.set_overlays(overlays)
+
+    def _state(self) -> object | None:
+        """The action's current internal state, or None if the form has none."""
+        provider = self.scope.context.form.state
+        return provider() if provider is not None and self.reads_state else None
 
     def sources(self) -> list[FieldEditor[Any]]:
         """
@@ -336,7 +351,7 @@ def wire_overlays(context: BuildContext) -> None:
         binding.wired = True
 
         sources = binding.sources()
-        if not sources:
+        if not sources and not binding.reads_state:
             continue
 
         for source in sources:

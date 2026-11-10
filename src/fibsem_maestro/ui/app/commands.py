@@ -295,6 +295,27 @@ class AppCommands:
             return
         self._session.commit_settings(action)
 
+    def reset_action_state(self, action: Action) -> None:
+        """
+        Discard an action's internal state.
+
+        An action that is no longer in the workflow is ignored: its directory
+        may now belong to a different action of the same name (import).
+
+        Args:
+            action: The action.
+
+        Raises:
+            NotAllowedError: If `action_tools_enabled` is false.
+        """
+        self._check(
+            self._permissions().action_tools_enabled,
+            "Cannot reset the state of an action now.",
+        )
+        if not any(a is action for a in self._session.actions):
+            return
+        self._session.reset_action_state(action)
+
     def save_properties(
         self,
         action: Action,

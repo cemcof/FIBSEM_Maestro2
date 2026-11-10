@@ -63,8 +63,15 @@ class FormContexts:
         self._previews = previews
         self._permission = permission
 
-    def for_action_settings(self) -> FormContext:
-        """An action's settings form: workflow logger, actions, catalogs, previews."""
+    def for_action_settings(self, action: Action | None = None) -> FormContext:
+        """
+        An action's settings form: workflow logger, actions, catalogs, previews.
+
+        Args:
+            action: The action whose settings are edited, for overlays drawn
+                from its internal state; None if the form edits no action's
+                settings.
+        """
         return FormContext(
             log=self._session.text_logger(),
             actions=self._session,
@@ -72,6 +79,7 @@ class FormContexts:
             pattern_types=self._catalogs.pattern_types,
             previews=self._previews,
             preview_permission=self._permission,
+            state=(lambda: action.state) if action is not None else None,
         )
 
     def for_properties(self, action: Action) -> FormContext:

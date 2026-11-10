@@ -1,9 +1,9 @@
 # Released under GPL-3.0 License.
 # Copyright (c) 2024-2026 CEMCOF
 
-
-import copy
 from typing import TYPE_CHECKING
+
+from pydantic import Field
 
 from fibsem_maestro.action.action import Action
 from fibsem_maestro.action.outcome import Produced, StepOutcome
@@ -11,7 +11,10 @@ from fibsem_maestro.action.registry import ACTION_REGISTRY
 from fibsem_maestro.action.state import ActionState
 from fibsem_maestro.core.area import NMArea, RelativeArea
 from fibsem_maestro.core.direction import Direction
+from fibsem_maestro.core.point import NMPoint
+from fibsem_maestro.core.resolution import Resolution
 from fibsem_maestro.milling.error import MillingError
+from fibsem_maestro.settings.base_settings import BaseSettings
 from fibsem_maestro.settings.milling_settings import MillingSettings
 
 if TYPE_CHECKING:
@@ -19,25 +22,76 @@ if TYPE_CHECKING:
     from fibsem_maestro.microscope.microscope import Microscope
     from fibsem_maestro.workflow.actions import Actions
 
+_TOLERANCE_NM = 0.1
+"""Slack allowed when checking that a slice fits the milling area (nm)."""
+
+
+class PixelScale(BaseSettings):
+    """
+    Resolution and pixel size of a beam, for converting relative areas to nanometers.
+
+    Attributes:
+        resolution: Scan resolution, in pixels.
+        pixel_size_nm: Size of one pixel, in nm.
+    """
+
+    resolution: Resolution
+    pixel_size_nm: float
+
+    def to_nanometers(self, area: RelativeArea) -> NMArea:
+        """
+        Convert a relative area to nanometers, rounding to whole pixels as the milling does.
+
+        Args:
+            area: The area, relative to the scanned image (0-1).
+
+        Returns:
+            The area in nm, measured from the image's top-left corner.
+        """
+        return area.to_nanometers(self.resolution, self.pixel_size_nm)
+
 
 class MillingState(ActionState):
-    milling_slice: NMArea | None = None
-    used_up_area: RelativeArea | None = None
-    """The designated milling area whose end was reached, or None."""
+    """
+    The progress of a milling through its milling area.
+
+    The next slice lies `slices_milled` slice distances from the trailing edge
+    of the milling area (the edge milling starts at), so it follows the area
+    when the area is moved or resized.
+    """
+
+    slices_milled: int = Field(
+        default=0,
+        ge=0,
+        description="Slices milled since the state was last reset.",
+    )
+    pixel_scale: PixelScale | None = Field(
+        default=None,
+        description="Resolution and pixel size of the beam at the last milling. "
+        "Used to convert the milling area to nanometers when checking whether the "
+        "next slice still fits, without asking the microscope. None until the "
+        "first slice is milled.",
+    )
 
 
-_AREA_USED_UP = "the milling area is used up; change it to continue"
+_AREA_USED_UP = (
+    "the milling area is used up; enlarge it or reset the milling's state to continue"
+)
 
 
 @ACTION_REGISTRY.register("milling")
 class Milling(Action[MillingSettings, MillingState]):
     """
     Performs focused ion beam milling one slice at a time.
+
+    Slices are milled one slice distance apart. The state counts the slices
+    milled since it was last reset; the area may be moved or resized meanwhile,
+    and the next slice follows it. The acquisition ends once the next slice no longer
+    fits the area; enlarging the area, or resetting the state (which restarts at the start edge),
+    lets it continue.
     """
 
-    _STATE_FIELDS = frozenset(
-        {"milling_area", "slice_distance", "milling_direction", "beam_type"}
-    )
+    _STATE_FIELDS = frozenset({"slice_distance", "milling_direction", "beam_type"})
 
     def __init__(
         self,
@@ -48,8 +102,8 @@ class Milling(Action[MillingSettings, MillingState]):
         actions: Actions,
     ):
         super().__init__(name, microscope, settings, ctx, actions)
-        self._current_milling_slice: NMArea | None = None
-        self._used_up_area: RelativeArea | None = None
+        self._slices_milled = 0
+        self._pixel_scale: PixelScale | None = None
 
     @classmethod
     def settings_cls(cls) -> type[MillingSettings]:
@@ -62,135 +116,118 @@ class Milling(Action[MillingSettings, MillingState]):
     @property
     def state(self) -> MillingState:
         return MillingState(
-            milling_slice=self._current_milling_slice,
-            used_up_area=self._used_up_area,
+            slices_milled=self._slices_milled, pixel_scale=self._pixel_scale
         )
 
     def set_state(self, state: MillingState) -> None:
-        self._current_milling_slice = state.milling_slice
-        self._used_up_area = state.used_up_area
-
-    def reset_state(self) -> None:
-        """
-        Discard the milling position, but remember a used-up milling area.
-
-        Changing the slice distance, direction or beam therefore restarts milling
-        at the leading edge without lifting the end of the acquisition; only a
-        different milling area does.
-        """
-        self.set_state(MillingState(used_up_area=self._used_up_area))
-        self._ctx.state_store.write("state.yaml", self.state)
-
-    def reset(self) -> None:
-        """Reset the action to slice 0 and its default state, forgetting a used-up area."""
-        self._used_up_area = None
-        super().reset()
+        self._slices_milled = state.slices_milled
+        self._pixel_scale = state.pixel_scale
 
     def completion_reason(self) -> str | None:
         """
-        Report the end of the acquisition once the milling area is used up.
+        Report the end of the acquisition once the next slice no longer fits the milling area.
 
         Returns:
-            The reason while the used-up area is still the designated milling
-            area, otherwise None.
+            The reason if the next slice does not fit, otherwise None (also
+            before the first milling, or without exactly one milling area).
         """
-        if self._is_area_used_up():
-            return _AREA_USED_UP
-        return None
+        areas = self._settings.milling_area
+        if len(areas) != 1 or self._pixel_scale is None:
+            return None
+        if self._fits(self._slices_milled, self._pixel_scale.to_nanometers(areas[0])):
+            return None
+        return _AREA_USED_UP
 
     def test(self) -> None:
         raise MillingError(f"Testing is not implemented for {self.name}")
 
     def _run_step(self) -> StepOutcome:
-        if len(self._settings.milling_area) != 1:
+        areas = self._settings.milling_area
+        if len(areas) != 1:
+            raise MillingError(f"Expected exactly one milling area, got {len(areas)}.")
+
+        beam = self._microscope.beam
+        self._pixel_scale = PixelScale(
+            resolution=beam.resolution, pixel_size_nm=beam.pixel_size
+        )
+        milling_area_nm = self._pixel_scale.to_nanometers(areas[0])
+
+        # never mill outside the designated area
+        if not self._fits(self._slices_milled, milling_area_nm):
             raise MillingError(
-                f"Expected exactly one milling area, got {len(self._settings.milling_area)}."
+                "The milling area is used up; enlarge it or reset the milling's "
+                "state to continue."
             )
 
-        if self._is_area_used_up():
-            raise MillingError("The milling area is used up; change it to continue.")
-
-        milling_area_nm = self._get_milling_area_nm()
-        if self._current_milling_slice is None:
-            self._set_current_milling_slice()
-        assert self._current_milling_slice is not None
-
-        # never mill outside the designated area, whatever state was stored
-        self._check_milling_area_in_bounds(self._current_milling_slice, milling_area_nm)
+        milling_slice = self._slice_at(self._slices_milled, milling_area_nm)
+        if not milling_slice.has_size():
+            raise MillingError(f"Area to be milled has no size: {milling_slice}")
 
         self._ctx.text_logger.debug(
-            f"Area to be milled in this slice in nanometers: {self._current_milling_slice}."
+            f"Area to be milled in this slice in nanometers: {milling_slice}."
         )
         self._ctx.text_logger.info("Starting the milling procedure.")
-        self._microscope.beam.rectangle_milling(
-            self._current_milling_slice,
+        beam.rectangle_milling(
+            milling_slice,
             self._settings.milling_depth,
             self._settings.milling_direction,
             self._settings.pattern_type,
             self._settings.do_not_mill,
         )
         self._ctx.text_logger.info("Milling procedure completed.")
+        self._slices_milled += 1
 
-        # update the milling area for the next slice
-        self._current_milling_slice = self._current_milling_slice.shifted_in_direction(
-            self._settings.milling_direction, self._settings.slice_distance
-        )
-
-        if not self._current_milling_slice.has_size():
-            raise MillingError(
-                f"Area to be milled has no size: {self._current_milling_slice}"
-            )
-
-        if milling_area_nm.contains(self._current_milling_slice, tolerance=0.1):
+        if self._fits(self._slices_milled, milling_area_nm):
             self._ctx.text_logger.debug(
-                f"Area to be milled in the next slice in nanometers: {self._current_milling_slice}."
+                "Area to be milled in the next slice in nanometers: "
+                f"{self._slice_at(self._slices_milled, milling_area_nm)}."
             )
         else:
             # the next slice would leave the area: this slice was the last one; the
             # workflow finishes before the next slice (see `completion_reason`)
-            self._used_up_area = self._settings.milling_area[0]
             self._ctx.text_logger.info("The milling area is used up.")
 
         return Produced(self.collect_properties())
 
-    def _get_milling_area_nm(self) -> NMArea:
-        return self._settings.milling_area[0].to_nanometers(
-            self._microscope.beam.resolution, self._microscope.beam.pixel_size
-        )
+    def _fits(self, index: int, area_nm: NMArea) -> bool:
+        """
+        Whether the slice with the given index fits the milling area.
 
-    def _set_current_milling_slice(self) -> None:
-        slice_dist = self._settings.slice_distance
-        milling_area_nm = self._get_milling_area_nm()
+        Args:
+            index: Index of the slice, counted from the trailing edge (0 = first).
+            area_nm: The milling area, in nm.
 
-        origin = copy.copy(milling_area_nm.origin)
+        Returns:
+            True if the slice ends within the area, up to `_TOLERANCE_NM`.
+        """
+        depth_nm = (index + 1) * self._settings.slice_distance
+        return depth_nm <= area_nm.height + _TOLERANCE_NM
 
+    def _slice_at(self, index: int, area_nm: NMArea) -> NMArea:
+        """
+        The slice with the given index, counted from the starting edge of the milling area.
+
+        Args:
+            index: Index of the slice (0 = the slice at the starting edge).
+            area_nm: The milling area, in nm.
+
+        Returns:
+            The slice, in nm: as wide as the area, one slice distance high.
+
+        Raises:
+            MillingError: If the milling direction is not up or down.
+        """
+        slice_distance = self._settings.slice_distance
         match self._settings.milling_direction:
             case Direction.DOWN:
-                pass
+                y = area_nm.origin.y + index * slice_distance
             case Direction.UP:
-                origin.y += milling_area_nm.height - slice_dist
-            case Direction.LEFT | Direction.RIGHT:
-                raise MillingError(
-                    f"Invalid milling direction {self._settings.milling_direction}"
-                )
+                y = area_nm.origin.y + area_nm.height - (index + 1) * slice_distance
+            case direction:
+                raise MillingError(f"Invalid milling direction {direction}")
 
-        self._current_milling_slice = NMArea(
-            origin=origin,
-            width=milling_area_nm.width,
-            height=slice_dist,
+        return NMArea(
+            origin=NMPoint(x=area_nm.origin.x, y=y),
+            width=area_nm.width,
+            height=slice_distance,
         )
-
-    def _is_area_used_up(self) -> bool:
-        areas = self._settings.milling_area
-        return (
-            self._used_up_area is not None
-            and len(areas) == 1
-            and self._used_up_area == areas[0]
-        )
-
-    @staticmethod
-    def _check_milling_area_in_bounds(area: NMArea, bounds: NMArea) -> None:
-        if not bounds.contains(area, tolerance=0.1):
-            raise MillingError(
-                f"The slice to be milled ({area}) lies outside the designated milling area."
-            )

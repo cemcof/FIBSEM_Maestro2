@@ -8,7 +8,7 @@ from __future__ import annotations
 import contextlib
 from typing import TYPE_CHECKING
 
-from PyQt6.QtWidgets import QScrollArea, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QMessageBox, QScrollArea, QVBoxLayout, QWidget
 
 from fibsem_maestro.ui.actions_ui.spec import (
     SectionContext,
@@ -105,10 +105,11 @@ class ActionPanel(QWidget):
 
         self._header = ActionHeader(ui_spec.tools, self._header_data(), parent=self)
         self._header.tool_clicked.connect(self._on_tool_clicked)
+        self._header.reset_clicked.connect(self._on_reset_clicked)
         layout.addWidget(self._header.frame)
 
-        # settings
-        settings_context = form_contexts.for_action_settings()
+        # settings; overlays may be drawn from the action's internal state
+        settings_context = form_contexts.for_action_settings(action)
         self._form: Form = form_builder.build_live(
             action.settings, settings_context, on_commit=self._on_settings_committed
         )
@@ -151,7 +152,8 @@ class ActionPanel(QWidget):
         self._on_permissions_changed(policy.permissions)
 
         # the header also follows the slice (status, reset) and the run state,
-        # since the props file of the current slice decides Edit and Apply
+        # since the props file of the current slice decides Edit and Apply, and
+        # the state decides Reset state and the overlays drawn from it
         for signal, slot in self._service_connections():
             signal.connect(slot)
 
@@ -199,7 +201,9 @@ class ActionPanel(QWidget):
             (self._session.action_renamed, self._on_action_event),
             (self._session.action_settings_changed, self._on_action_event),
             (self._session.action_props_changed, self._on_action_event),
-            (self._session.workflow_reset, self._render_header),
+            (self._session.action_state_changed, self._on_action_event),
+            (self._run.action_finished, self._on_action_event),
+            (self._session.workflow_reset, self._on_workflow_reset),
             (self._run.state_changed, self._render_header),
             (self._status.changed, self._render_header),
         )
@@ -218,6 +222,30 @@ class ActionPanel(QWidget):
     def _on_action_event(self, action: object, *_: object) -> None:
         if action is self._action:
             self._render_header()
+            # its state may have changed: it ran, was reset, or its settings or
+            # props changed what it keeps
+            self._form.refresh_overlays()
+
+    def _on_workflow_reset(self) -> None:
+        self._render_header()
+        self._form.refresh_overlays()
+
+    def _on_reset_clicked(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Reset state",
+            f"Reset the internal state of '{self._action.name}'?\n\n"
+            "This discards the current progress of the action. The settings and the stored "
+            "properties are kept.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._commands.reset_action_state(self._action)
+        except OSError as e:
+            QMessageBox.critical(self, "Error", f"Could not store the reset state: {e}")
 
     def _on_permissions_changed(self, permissions: Permissions) -> None:
         # danger mode unlocks the settings and the tools usable in danger mode;

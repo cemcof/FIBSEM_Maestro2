@@ -481,20 +481,23 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
 
         return None
 
-    def _on_settings_changed_at(self, path: ChangePath) -> None:
+    def reset_state(self) -> None:
         """
-        Reset the state if a state-defining field changed, and restore the imaging's value.
+        Discard the state; a discarded step-mode run gives the imaging back its value.
 
-        A step-mode run that the change discards no longer needs its trial
-        value in the linked imaging; the value the sweep started from is
-        put back first.
-
-        Args:
-            path: Location of the change relative to the settings.
+        The value the sweep started from replaces the trial value in the
+        linked imaging's upcoming properties. Covers every reset that discards
+        a valid run: a state-defining settings change and the Reset state
+        button, but not a reset of the whole workflow (`reset`).
         """
-        if self._active_gen is not None and (not path or path[0] in self._STATE_FIELDS):
-            self._restore_imaging()
-        super()._on_settings_changed_at(path)
+        self._restore_imaging()
+        super().reset_state()
+
+    def reset(self) -> None:
+        """Reset to slice 0 and the default state, leaving the imaging's properties alone."""
+        # the workflow restarts: the imaging's props of slice 0 are not the run's
+        self._trial_target = None
+        super().reset()
 
     def _on_properties_replaced(self, of: Action) -> None:
         """
@@ -531,7 +534,6 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
         """Where a sweep on `imaging` puts its trial values; None unless in step mode."""
         if not self.is_step_mode:
             return None
-
         beam = self.beam_type
         assert beam is not None
         return _TrialTarget(imaging, beam, self._runner.attributes)
@@ -553,7 +555,6 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
         props = target.imaging.read_properties()
         for name, value in zip(target.attributes, base, strict=True):
             props.set_property(name, value, target.beam)
-
         target.imaging.write_properties(props)
         self._ctx.text_logger.info(
             f"Restored {dict(zip(target.attributes, base, strict=True))} for the "
@@ -562,8 +563,6 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
 
     def _abort_sweep(self) -> None:
         """Close and discard the active sweep."""
-        # TODO: after a failed step the linked imaging keeps the last trial value until the next sweep
-        # this should eventually be fixed, but it breaks the current architecture
         assert self._active_gen is not None
         self._active_gen.close()
         self._active_gen = None

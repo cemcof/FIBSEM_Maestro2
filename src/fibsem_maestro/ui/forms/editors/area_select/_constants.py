@@ -32,3 +32,7 @@ TILE_PEN = _cosmetic_pen(TILE_COLOR, 3)
 LINE_COLOR = QColor(140, 200, 255)
 LINE_PEN = _cosmetic_pen(LINE_COLOR, 3, Qt.PenStyle.DotLine)
 MAX_LINES = 1000
+
+NEXT_SLICE_COLOR = QColor(255, 190, 0)
+NEXT_SLICE_PEN = _cosmetic_pen(NEXT_SLICE_COLOR, 2)
+NEXT_SLICE_FILL = QBrush(QColor(255, 190, 0, 90))

@@ -33,8 +33,10 @@ class MillingSettings(BaseSettings):
                 OverlaySpec.of(
                     AreaOverlay.SHOW_DIRECTION, direction="milling_direction"
                 ),
+                # the next slice is highlighted, from the milling's progress
                 OverlaySpec.of(
                     AreaOverlay.SHOW_AREA_SLICES,
+                    state={"slices_milled": "slices_milled"},
                     slice_distance_nm="slice_distance",
                     direction="milling_direction",
                 ),

@@ -216,4 +216,6 @@ def test_action_panel_shows_its_tools(app: Composition, key: str) -> None:
 
     buttons = children(panel.header.frame, IconButton)
 
-    assert [panel.header.button(tool) for tool in tools] == buttons
+    # the tools, then Reset state apart at the right end
+    tool_buttons = [panel.header.button(tool) for tool in tools]
+    assert [*tool_buttons, panel.header.reset_button] == buttons

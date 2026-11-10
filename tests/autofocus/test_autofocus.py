@@ -515,3 +515,29 @@ def test_settings_change_discarding_the_run_restores_the_imaging(
     assert not autofocus.run_in_progress
     # restored on the imaging the run patched, not the newly linked one
     assert _next_frame_wd(imaging) == pytest.approx(base[0])
+
+
+def test_resetting_the_state_of_a_step_autofocus_restores_the_imaging(
+    running: tuple[Action, Autofocus],
+) -> None:
+    imaging, autofocus = running
+    base = autofocus.state.sweep_base_value
+    assert base is not None
+
+    # e.g. the Reset state button
+    autofocus.reset_state()
+
+    assert not autofocus.run_in_progress
+    assert _next_frame_wd(imaging) == pytest.approx(base[0])
+
+
+def test_workflow_reset_leaves_the_imaging_props_alone(
+    running: tuple[Action, Autofocus],
+) -> None:
+    imaging, autofocus = running
+    before = imaging.read_properties()
+
+    autofocus.reset()
+
+    assert not autofocus.run_in_progress
+    assert imaging.read_properties() == before

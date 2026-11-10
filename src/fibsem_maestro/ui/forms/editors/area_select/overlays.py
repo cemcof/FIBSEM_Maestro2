@@ -37,8 +37,13 @@ from fibsem_maestro.ui.forms.editors.area_select._constants import (
     MARGIN_PEN,
     MAX_LINES,
     MAX_TILES,
+    NEXT_SLICE_FILL,
+    NEXT_SLICE_PEN,
     TILE_PEN,
 )
+
+_FIT_TOLERANCE_PX = 1e-6
+"""Slack allowed when checking that the next slice fits the area (image pixels)."""
 
 if TYPE_CHECKING:
     from fibsem_maestro.ui.forms.editors.area_select._rectangle import (
@@ -50,8 +55,9 @@ OverlayValues = Mapping[str, Any]
 Runtime values feeding one overlay, keyed by its `AreaOverlay.data_fields`.
 
 The keys in use: `margin_nm` (nm), `direction` (`Direction`), `tile_size_nm`
-(nm), `tile_relative_overlap` (relative, 0-1) and `slice_distance_nm` (nm). A
-missing key or a None value means the value is not available.
+(nm), `tile_relative_overlap` (relative, 0-1), `slice_distance_nm` (nm) and
+`slices_milled` (count, from the action's state). A missing key or a None
+value means the value is not available.
 """
 
 
@@ -316,7 +322,7 @@ class TileDecoration(AreaDecoration):
 
 class AreaSliceDecoration(AreaDecoration):
     """
-    Dashed lines splitting the area into strips one shift apart.
+    Dashed lines splitting the area into strips one shift apart, with the next slice highlighted.
 
     For `Direction.UP`/`Direction.DOWN` the lines run parallel to the x-axis
     and are spaced `shift_px` apart in y; for `Direction.LEFT`/`Direction.RIGHT`
@@ -325,38 +331,101 @@ class AreaSliceDecoration(AreaDecoration):
     of the image (decreasing y).
 
     Lines are anchored at the trailing edge (the edge the area moves away from).
+    The strip `slices_milled` strips from the trailing edge, the slice milled
+    next, is filled; nothing is filled if it does not fit the area (the area
+    is used up) or the progress is unknown.
 
     Args:
         slice_dist_px: Slice distance, in scene units (image pixels).
         direction: The direction the area moves in.
+        slices_milled: Slices milled so far, i.e. the index of the next slice
+            counted from the trailing edge; None if unknown.
     """
 
-    def __init__(self, slice_dist_px: float, direction: Direction) -> None:
+    def __init__(
+        self,
+        slice_dist_px: float,
+        direction: Direction,
+        slices_milled: int | None = None,
+    ) -> None:
         self._slice_dist_px = slice_dist_px
         self._direction = direction
+        self._slices_milled = slices_milled
         self._item: QGraphicsPathItem | None = None
+        self._next_item: QGraphicsRectItem | None = None
 
     def attach(self, rect: ResizableRect) -> None:
-        """Create the slice lines as a child item of `rect`, and lay it out."""
+        """Create the slice lines and the next-slice highlight as child items of `rect`, and lay them out."""
         item = QGraphicsPathItem(rect)
         item.setPen(LINE_PEN)
         item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
         item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         self._item = item
+
+        next_item = QGraphicsRectItem(rect)
+        next_item.setPen(NEXT_SLICE_PEN)
+        next_item.setBrush(NEXT_SLICE_FILL)
+        next_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self._next_item = next_item
         self.update(rect)
 
     def update(self, rect: ResizableRect) -> None:
-        """Re-draw the slice lines over the rectangle's area. Does nothing before `attach`."""
+        """Re-draw the slice lines and the highlight over the rectangle's area. Does nothing before `attach`."""
         if self._item is not None:
             self._item.setPath(
                 self._split_path(rect.rect(), self._slice_dist_px, self._direction)
             )
+        if self._next_item is not None:
+            strip = self.next_slice(rect.rect())
+            self._next_item.setVisible(strip is not None)
+            self._next_item.setRect(strip if strip is not None else QRectF())
 
     def detach(self) -> None:
-        """Remove the slice lines from the scene. Idempotent."""
-        if self._item is not None and (scene := self._item.scene()) is not None:
-            scene.removeItem(self._item)
+        """Remove the slice lines and the highlight from the scene. Idempotent."""
+        for item in (self._item, self._next_item):
+            if item is not None and (scene := item.scene()) is not None:
+                scene.removeItem(item)
         self._item = None
+        self._next_item = None
+
+    def next_slice(self, area: QRectF) -> QRectF | None:
+        """
+        The strip of `area` milled next.
+
+        Args:
+            area: The area, in scene units (image pixels).
+
+        Returns:
+            The strip `slices_milled` slice distances from the trailing edge,
+            one slice distance deep, in scene units; None if the progress is
+            unknown, the slice distance is not positive, or the strip does
+            not fit the area.
+        """
+        index = self._slices_milled
+        step = self._slice_dist_px
+        if index is None or step <= 0:
+            return None
+
+        area = area.normalized()
+        horizontal = self._direction in (Direction.UP, Direction.DOWN)
+        extent = area.height() if horizontal else area.width()
+        near = index * step
+        if near + step > extent + _FIT_TOLERANCE_PX:
+            return None
+
+        match self._direction:
+            case Direction.DOWN:
+                return QRectF(area.left(), area.top() + near, area.width(), step)
+            case Direction.UP:
+                return QRectF(
+                    area.left(), area.bottom() - near - step, area.width(), step
+                )
+            case Direction.RIGHT:
+                return QRectF(area.left() + near, area.top(), step, area.height())
+            case Direction.LEFT:
+                return QRectF(
+                    area.right() - near - step, area.top(), step, area.height()
+                )
 
     def _split_path(
         self, area: QRectF, shift_px: float, direction: Direction
@@ -493,6 +562,7 @@ def _area_slices(
     return AreaSliceDecoration(
         slice_dist_px=slice_distance_nm / pixel_size_nm,
         direction=direction,
+        slices_milled=values.get("slices_milled"),
     )
 
 

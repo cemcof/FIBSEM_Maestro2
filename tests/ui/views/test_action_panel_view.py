@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from gui_testkit import TIMEOUT_MS
@@ -25,12 +25,15 @@ from gui_testkit.driving import (
     task_running,
 )
 from gui_testkit.workflows import simulated_workflow
-from PyQt6.QtWidgets import QDialogButtonBox, QLabel, QWidget
+from PyQt6.QtWidgets import QDialogButtonBox, QLabel, QMessageBox, QWidget
 
 from fibsem_maestro.action.registry import ACTION_REGISTRY
+from fibsem_maestro.core.area import RelativeArea
 from fibsem_maestro.core.registry import Registry
+from fibsem_maestro.milling.milling import MillingState
 from fibsem_maestro.properties.beam_properties import BeamProperties
 from fibsem_maestro.properties.global_properties import GlobalProperties
+from fibsem_maestro.settings.form_utils import AreaOverlay
 from fibsem_maestro.ui.actions_ui import spec as actions_ui_spec
 from fibsem_maestro.ui.actions_ui.default_tools import DEFAULT_TOOLS, TEST_TOOL
 from fibsem_maestro.ui.actions_ui.spec import (
@@ -44,6 +47,7 @@ from fibsem_maestro.ui.app.edit_policy import permissions_for
 from fibsem_maestro.ui.app.files import WorkflowFiles
 from fibsem_maestro.ui.app.run_state import AppState
 from fibsem_maestro.ui.app.session import WorkflowSession
+from fibsem_maestro.ui.forms.editors.area_select.widget import AreaSelectWidget
 from fibsem_maestro.ui.views.action_panel.header import action_header_view
 from fibsem_maestro.ui.widgets.icons import ICON_TEST
 from fibsem_maestro.ui.widgets.properties_dialog import PropertiesDialog
@@ -426,3 +430,85 @@ def test_action_panel_registered_tool_follows_its_own_conditions(
         other_header.button(tool.key)
     with pytest.raises(KeyError):
         other_header.button("viewer")
+
+
+def _milling_with_progress(app: Composition, slices_milled: int = 2) -> Action:
+    """A milling action with one area, `slices_milled` slices into it."""
+    milling = app.commands.add_action("milling", "milling")
+    milling.settings.milling_area = [RelativeArea.full()]
+    milling.set_state(MillingState(slices_milled=slices_milled))
+    return milling
+
+
+def test_action_panel_reset_state_button_resets_after_confirmation(
+    qtbot: QtBot, app: Composition, boxes: MessageBoxes
+) -> None:
+    milling = _milling_with_progress(app)
+    shown(app, milling)
+    reset = panel_of(app, milling).header.reset_button
+    assert reset.isEnabled()
+
+    boxes.answer = QMessageBox.StandardButton.Cancel
+    with qtbot.assertNotEmitted(app.session.action_state_changed):
+        reset.click()
+    assert milling.state == MillingState(slices_milled=2)
+
+    boxes.answer = QMessageBox.StandardButton.Yes
+    with qtbot.waitSignal(app.session.action_state_changed) as changed:
+        reset.click()
+
+    assert changed.args == [milling]
+    assert boxes.titles() == ["Reset state", "Reset state"]
+    assert milling.state == MillingState()
+    assert milling.ctx.state_store.read("state.yaml", MillingState) == MillingState()
+    # nothing left to reset
+    assert not reset.isEnabled()
+
+
+def test_action_header_reset_state_needs_state_and_an_idle_microscope(
+    app: Composition,
+) -> None:
+    milling = _milling_with_progress(app)
+
+    def enabled(state: AppState, danger: bool = False, busy: bool = False) -> bool:
+        permissions = permissions_for(state, danger, busy)
+        return action_header_view(
+            milling, permissions, True, DEFAULT_TOOLS
+        ).reset_enabled
+
+    assert enabled(AppState.EDITING)
+    assert enabled(AppState.PAUSED)
+    # danger mode does not unlock it
+    assert not enabled(AppState.RUNNING, danger=True)
+    assert not enabled(AppState.EDITING, busy=True)
+
+    milling.set_state(MillingState())
+    assert not enabled(AppState.EDITING)
+
+
+def test_action_panel_slice_overlay_follows_the_milling_progress(
+    app: Composition,
+    boxes: MessageBoxes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ = boxes  # the reset is confirmed
+    pushed: list[int | None] = []
+    draw = AreaSelectWidget.set_overlays
+
+    def record(area: AreaSelectWidget, overlays: Any) -> None:
+        values = dict(overlays).get(AreaOverlay.SHOW_AREA_SLICES, {})
+        pushed.append(values.get("slices_milled"))
+        draw(area, overlays)
+
+    monkeypatch.setattr(AreaSelectWidget, "set_overlays", record)
+    milling = _milling_with_progress(app)
+    shown(app, milling)
+    assert pushed[-1] == 2
+
+    # the milling ran
+    milling.set_state(MillingState(slices_milled=3))
+    app.run.action_finished.emit(milling)
+    assert pushed[-1] == 3
+
+    panel_of(app, milling).header.reset_button.click()
+    assert pushed[-1] == 0

@@ -13,6 +13,13 @@ from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
 
 from fibsem_maestro.ui.schema.labels import class_name_to_label
 from fibsem_maestro.ui.widgets.icon_button import IconButton
+from fibsem_maestro.ui.widgets.icons import ICON_RESET_STATE
+
+RESET_STATE_TOOLTIP = (
+    "<b>Reset state</b><br>"
+    "Discard the action's internal state. The settings, the "
+    "stored properties and the slice are kept."
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -32,12 +39,14 @@ class ActionHeaderViewData:
         type_text: "   > type: <type label>".
         beam_text: "   > beam: <beam or —>".
         tools_enabled: Whether each tool button is enabled, by `ToolSpec.key`.
+        reset_enabled: Whether the Reset state button is enabled.
     """
 
     name: str
     type_text: str
     beam_text: str
     tools_enabled: dict[str, bool]
+    reset_enabled: bool
 
 
 def action_header_view(
@@ -50,6 +59,10 @@ def action_header_view(
     microscope) or danger mode is on (if it is usable in danger mode), props
     are stored for the action's current slice (if it needs them) and its own
     condition holds (if it has one).
+
+    Reset state is enabled iff the tools may be used (`action_tools_enabled`;
+    danger mode does not unlock it) and the action's state is not the default
+    one, i.e. there is something to discard.
 
     Args:
         action: The action.
@@ -77,12 +90,18 @@ def action_header_view(
             )
             for tool in tools
         },
+        reset_enabled=(
+            permissions.action_tools_enabled and action.state != action.state_cls()()
+        ),
     )
 
 
 class ActionHeader(QObject):
     """
     Header frame: name, type and beam labels, with the tool buttons beside them.
+
+    The Reset state button sits apart at the right end, behind a divider: it
+    discards what the action has done, unlike the tools.
 
     The frame itself is a plain `QFrame` (`frame`): the application style sheet
     draws the styled-panel border of a plain `QFrame` but not of a subclass.
@@ -95,6 +114,9 @@ class ActionHeader(QObject):
 
     tool_clicked = pyqtSignal(str)
     """The `ToolSpec.key` of a clicked tool button."""
+
+    reset_clicked = pyqtSignal()
+    """The Reset state button was clicked."""
 
     def __init__(
         self,
@@ -133,10 +155,21 @@ class ActionHeader(QObject):
             self._buttons[tool.key] = button
             buttons_layout.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
 
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.VLine)
+        divider.setFrameShadow(QFrame.Shadow.Sunken)
+        self._reset_button = IconButton(
+            ICON_RESET_STATE, RESET_STATE_TOOLTIP, "Reset internal state"
+        )
+        self._reset_button.clicked.connect(self.reset_clicked)
+
         header_layout.addLayout(labels_layout)
         header_layout.addSpacing(50)
         header_layout.addLayout(buttons_layout)
         header_layout.addStretch(1)
+        header_layout.addWidget(divider)
+        header_layout.addSpacing(4)
+        header_layout.addWidget(self._reset_button, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.render_data(data)
 
@@ -155,6 +188,11 @@ class ActionHeader(QObject):
         """The label showing the action's beam."""
         return self._beam_label
 
+    @property
+    def reset_button(self) -> IconButton:
+        """The Reset state button."""
+        return self._reset_button
+
     def render_data(self, data: ActionHeaderViewData) -> None:
         """
         Show new view data.
@@ -167,6 +205,7 @@ class ActionHeader(QObject):
         self._beam_label.setText(data.beam_text)
         for key, button in self._buttons.items():
             button.setEnabled(data.tools_enabled.get(key, False))
+        self._reset_button.setEnabled(data.reset_enabled)
 
     def button(self, key: str) -> IconButton:
         """

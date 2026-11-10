@@ -35,6 +35,12 @@ ICON_TEST = (
 )
 """Lab flask: test the action outside the acquisition."""
 
+ICON_RESET_STATE = (
+    '<path d="M4 12a8 8 0 1 0 2.34-5.66"/><path d="M4 4v5h5"/>'
+    '<circle cx="12" cy="12" r="1.5" fill="currentColor"/>'
+)
+"""Counter-clockwise arrow around a dot: discard the action's internal state."""
+
 ICON_SKULL = (
     '<path d="M12 3C7.6 3 4 6.3 4 10.5c0 2.6 1.2 4.5 3 5.7V19a1 1 0 0 0 1 1h8'
     'a1 1 0 0 0 1-1v-2.8c1.8-1.2 3-3.1 3-5.7C20 6.3 16.4 3 12 3z"/>'

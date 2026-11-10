@@ -19,6 +19,7 @@ from gui_testkit.situations import busy_tasks, store_unappliable_props
 from gui_testkit.windows_lock import windows_like_delete
 
 from fibsem_maestro.logging.text.file import close_all_log_files
+from fibsem_maestro.milling.milling import MillingState
 from fibsem_maestro.properties.beam_properties import BeamProperties
 from fibsem_maestro.properties.global_properties import GlobalProperties
 from fibsem_maestro.settings.property_names import PropertyNames
@@ -212,6 +213,7 @@ def test_commands_whole_workflow_refused_while_task_busy(
             lambda: commands.import_workflow(tmp_path / "source"),
             commands.reset_workflow,
             lambda: save_unchanged(commands, prepared[0]),
+            lambda: commands.reset_action_state(prepared[0]),
             commands.run_pressed,
         ):
             with pytest.raises(NotAllowedError):
@@ -537,3 +539,29 @@ def test_commands_save_properties_lets_every_action_discard_invalidated_state(
     save_unchanged(services.commands, first)
 
     assert replaced == [first]
+
+
+def test_commands_reset_action_state_resets_and_announces(
+    qtbot: QtBot, services: Services, add_action: Callable[..., Action]
+) -> None:
+    milling = add_action("milling", "milling")
+    milling.set_state(MillingState(slices_milled=2))
+
+    with qtbot.waitSignal(services.session.action_state_changed) as changed:
+        services.commands.reset_action_state(milling)
+
+    assert changed.args == [milling]
+    assert milling.state == MillingState()
+
+
+def test_commands_reset_action_state_ignores_a_removed_action(
+    qtbot: QtBot, services: Services, add_action: Callable[..., Action]
+) -> None:
+    milling = add_action("milling", "milling")
+    milling.set_state(MillingState(slices_milled=2))
+    services.session.remove_action(milling)
+
+    with qtbot.assertNotEmitted(services.session.action_state_changed):
+        services.commands.reset_action_state(milling)
+
+    assert milling.state == MillingState(slices_milled=2)

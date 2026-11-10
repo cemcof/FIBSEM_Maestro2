@@ -160,6 +160,7 @@ class Readiness(QObject):
             session.structure_changed,
             session.action_settings_changed,
             session.action_props_changed,
+            session.action_state_changed,
             session.rules_changed,
             session.workflow_reset,
             session.workflow_replaced,

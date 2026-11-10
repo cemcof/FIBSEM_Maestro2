@@ -2,7 +2,7 @@
 # Copyright (c) 2024-2026 CEMCOF
 
 """
-The run ends at the end of the milling area, and continues once the area is changed.
+The run ends at the end of the milling area, and continues once the area is enlarged or the state reset.
 
 This flow belongs to `Milling`, the reference action that ends an acquisition
 (`completion_reason`), so it uses that action and its settings by name.
@@ -31,6 +31,7 @@ from fibsem_maestro.ui.app.run_state import AppState
 from fibsem_maestro.ui.forms.editors.area_select.widget import AreaSelectWidget
 
 if TYPE_CHECKING:
+    from gui_testkit.dialogs import MessageBoxes
     from pytestqt.qtbot import QtBot
 
     from fibsem_maestro.action.action import Action
@@ -39,12 +40,14 @@ if TYPE_CHECKING:
 USED_UP = "the milling area is used up"
 
 
-def area(y: float) -> RelativeArea:
+def area(y: float, height: float = 0.2) -> RelativeArea:
     # the simulated frame is 1500 nm high: 0.2 of it holds a few 100 nm slices
-    return RelativeArea(origin=RelativePoint(0.1, y), width=0.5, height=0.2)
+    return RelativeArea(origin=RelativePoint(0.1, y), width=0.5, height=height)
 
 
-def place_area(qtbot: QtBot, app: Composition, milling: Action, y: float) -> None:
+def place_area(
+    qtbot: QtBot, app: Composition, milling: Action, y: float, height: float = 0.2
+) -> None:
     """
     Put one area into the milling area selector and Load an image under it.
 
@@ -52,7 +55,7 @@ def place_area(qtbot: QtBot, app: Composition, milling: Action, y: float) -> Non
     with the mouse; showing a value alone commits nothing.
     """
     panel = panel_of(app, milling)
-    panel.form.set_value({"milling_area": [area(y)]})
+    panel.form.set_value({"milling_area": [area(y, height)]})
     (selector,) = children(panel, AreaSelectWidget)
     button(selector, "Load").click()
     qtbot.waitUntil(lambda: not app.tasks.busy, timeout=TIMEOUT_MS)
@@ -74,17 +77,25 @@ def set_up_milling(qtbot: QtBot, app: Composition) -> Action:
     return milling
 
 
-def test_flow_milling_end_finishes_after_the_last_slice_and_continues_on_a_new_area(
+def run_to_the_end(qtbot: QtBot, app: Composition) -> None:
+    """Run the workflow until the milling area is used up."""
+    run_button = app.window.top_bar.run_button
+    assert run_button.isEnabled(), run_button.toolTip()
+    run_button.click()
+    wait_for_state(qtbot, app.run, AppState.FINISHED)
+    assert not run_button.isEnabled()
+    assert USED_UP in run_button.toolTip()
+
+
+def test_flow_milling_end_finishes_after_the_last_slice_and_continues_on_an_enlarged_area(
     qtbot: QtBot, app: Composition
 ) -> None:
     milling = set_up_milling(qtbot, app)
     after = add_through_dialog(app, RUNNABLE_ACTION, "after")
     prepare_with_tool(qtbot, app, after)
     run_button = app.window.top_bar.run_button
-    assert run_button.isEnabled(), run_button.toolTip()
 
-    run_button.click()
-    wait_for_state(qtbot, app.run, AppState.FINISHED)
+    run_to_the_end(qtbot, app)
 
     finished_at = app.session.slice
     last = finished_at - 1
@@ -94,32 +105,48 @@ def test_flow_milling_end_finishes_after_the_last_slice_and_continues_on_a_new_a
     assert f"Completed 'after' for slice {last}." in logged_messages(
         app.session.workflow_dir, "after", last
     )
-    assert not run_button.isEnabled()
-    assert USED_UP in run_button.toolTip()
     assert app.window.error_dialog is None
 
-    # changing the area lifts the stop
+    # moving the area keeps its progress, so it stays used up
     app.window.action_list.select(milling)
     place_area(qtbot, app, milling, 0.5)
+    assert not run_button.isEnabled()
+
+    # enlarging it lifts the stop: milling goes on where it stopped
+    place_area(qtbot, app, milling, 0.5, height=0.4)
     assert run_button.isEnabled()
     assert USED_UP not in run_button.toolTip()
 
-    run_button.click()
-    assert app.run.state is AppState.RUNNING
-    wait_for_state(qtbot, app.run, AppState.FINISHED)
+    run_to_the_end(qtbot, app)
     assert app.session.slice > finished_at
-    assert USED_UP in run_button.toolTip()
 
 
-def test_flow_milling_end_is_not_lifted_by_another_setting(
+def test_flow_milling_end_is_lifted_by_resetting_the_state(
+    qtbot: QtBot, app: Composition, boxes: MessageBoxes
+) -> None:
+    milling = set_up_milling(qtbot, app)
+    run_to_the_end(qtbot, app)
+    reset = panel_of(app, milling).header.reset_button
+    assert reset.isEnabled()
+
+    reset.click()
+
+    assert boxes.titles() == ["Reset state"]
+    assert milling.state == milling.state_cls()()
+    assert not reset.isEnabled()
+    assert app.window.top_bar.run_button.isEnabled()
+
+
+def test_flow_milling_end_is_lifted_only_by_a_setting_defining_the_slices(
     qtbot: QtBot, app: Composition
 ) -> None:
     milling = set_up_milling(qtbot, app)
+    run_to_the_end(qtbot, app)
     run_button = app.window.top_bar.run_button
-    run_button.click()
-    wait_for_state(qtbot, app.run, AppState.FINISHED)
 
-    panel_of(app, milling).form.set_value({"slice_distance": 50.0})
-
+    panel_of(app, milling).form.set_value({"milling_depth": 5.0})
     assert not run_button.isEnabled()
-    assert USED_UP in run_button.toolTip()
+
+    # a new slice distance restarts milling at the trailing edge
+    panel_of(app, milling).form.set_value({"slice_distance": 50.0})
+    assert run_button.isEnabled()
