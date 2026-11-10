@@ -11,7 +11,7 @@ import pytest
 from gui_testkit.forms import children
 from pydantic import Field
 from PyQt6.QtGui import QColor, QFont
-from PyQt6.QtWidgets import QDoubleSpinBox, QScrollArea, QWidget
+from PyQt6.QtWidgets import QDoubleSpinBox, QLineEdit, QScrollArea, QWidget
 
 from fibsem_maestro.core.direction import Direction
 from fibsem_maestro.settings.base_settings import BaseSettings
@@ -223,14 +223,34 @@ def test_shown_default_is_short_and_readable(
     assert shown_default(value, suffix) == text
 
 
-def _pixels(widget: QWidget, color: str) -> int:
-    """How many pixels of the rendered widget have exactly `color`."""
-    image = widget.grab().toImage()
-    wanted = QColor(color)
-    return sum(
-        image.pixelColor(x, y) == wanted
+_TEXT_TOLERANCE = 8
+"""Slack per colour channel (0-255) for rounding in the text rendering."""
+
+
+def _text_pixels(spin: QDoubleSpinBox) -> list[QColor]:
+    """
+    The colours of the pixels the spin box's text covers, on its white background.
+
+    Antialiased text blends its colour with the background, so no text pixel
+    is darker, in any channel, than the colour the text is drawn in; the
+    checks rely on that instead of on exact colours, which depend on the
+    fonts and their rasterisation.
+    """
+    image = children(spin, QLineEdit)[0].grab().toImage()
+    white = QColor("white")
+    return [
+        color
         for x in range(image.width())
         for y in range(image.height())
+        if (color := image.pixelColor(x, y)) != white
+    ]
+
+
+def _darker_than(color: QColor, reference: QColor) -> bool:
+    """Whether some channel of `color` is clearly darker than in `reference`."""
+    return any(
+        channel < ref - _TEXT_TOLERANCE
+        for channel, ref in zip(color.getRgb()[:3], reference.getRgb()[:3])
     )
 
 
@@ -243,16 +263,24 @@ def test_values_grey_while_read_only(
     scroll.setWidget(form.widget)
     qtbot.addWidget(scroll)
     spin = spin_of(form, "base")
-    # large digits, so that the text has pixels of exactly its colour
+    # a known background, and digits large enough to cover many pixels
+    spin.setStyleSheet("background: white;")
     spin.setFont(QFont(spin.font().family(), 30))
     spin.setMinimumWidth(300)
     scroll.resize(600, 600)
     scroll.show()
     qtbot.waitExposed(scroll)
+    grey = QColor(READ_ONLY_COLOR)
 
-    assert _pixels(spin, READ_ONLY_COLOR) == 0
+    editable = _text_pixels(spin)
+    if not editable:
+        pytest.skip("this system draws no text (no fonts available to Qt)")
+    # the default text colour is darker than the grey
+    assert any(_darker_than(color, grey) for color in editable)
 
     # read-only spin boxes used to keep their normal text colour
     form.set_read_only(True)
     qtbot.wait(10)
-    assert _pixels(spin, READ_ONLY_COLOR) > 0
+    read_only = _text_pixels(spin)
+    assert read_only
+    assert not any(_darker_than(color, grey) for color in read_only)
