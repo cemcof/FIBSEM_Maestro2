@@ -34,7 +34,7 @@ from fibsem_maestro.core.image import Image
 from fibsem_maestro.ui.forms.context import FormContext
 from fibsem_maestro.ui.forms.editors.field_label import FieldLabel
 from fibsem_maestro.ui.forms.editors.object import (
-    RESETS_STATE_MARK,
+    RESETS_STATE_MARK_HTML,
     RESETS_STATE_NOTE,
     ObjectWidget,
 )
@@ -136,7 +136,9 @@ def test_form_marks_the_top_level_fields_resetting_the_state(
         fi.name: row
         for fi, row in zip(get_field_infos(KitchenSink), _row_labels(form.widget))
     }
-    marked = {name for name, (text, _) in rows.items() if RESETS_STATE_MARK in text}
+    marked = {
+        name for name, (text, _) in rows.items() if RESETS_STATE_MARK_HTML in text
+    }
     assert marked == {"count", "leaf"}
     text, tooltip = rows["count"]
     assert text.startswith("count ")
@@ -147,7 +149,7 @@ def test_form_marks_the_top_level_fields_resetting_the_state(
     # a nested field of the same name defines nothing
     leaf = editor_at(form.widget, "leaf").value_editor()
     assert isinstance(leaf, ObjectWidget)
-    assert all(RESETS_STATE_MARK not in text for text, _ in _row_labels(leaf))
+    assert all(RESETS_STATE_MARK_HTML not in text for text, _ in _row_labels(leaf))
 
 
 def test_form_field_subset_keeps_declaration_order(

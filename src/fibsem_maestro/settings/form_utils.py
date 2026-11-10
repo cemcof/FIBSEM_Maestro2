@@ -187,12 +187,23 @@ class CropSource:
 
 @dataclass
 class FormHint:
+    """
+    How the forms edit a field, beyond what its type says.
+
+    Attributes:
+        action_type_filter: For action selectors: the action classes offered.
+        action_type_exclude: For action selectors: registry keys of action
+            types not offered even though they pass `action_type_filter`
+            (subclasses of an excluded type included).
+    """
+
     widget: WidgetType
     choices: Callable[[], list[str]] | None = None
     file_filter: str | None = None
     max_areas: int | None = None
     min_areas: int | None = None
     action_type_filter: list[type[Action]] = field(default_factory=list)
+    action_type_exclude: tuple[str, ...] = ()
     overlays: tuple[OverlaySpec, ...] = ()
     # tried in order; the first that resolves to a beam decides
     beam_sources: tuple[BeamSource, ...] = ()

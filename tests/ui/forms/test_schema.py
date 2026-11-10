@@ -189,6 +189,21 @@ def test_choices_for_action_selector_skips_other_types(
     assert names == [a.name for a in actions if isinstance(a, only)]
 
 
+def test_choices_for_action_selector_skips_excluded_types_and_their_subclasses(
+    add_action: Callable[..., Action],
+) -> None:
+    fi = _info(KitchenSink, "linked")
+    assert fi.hint is not None
+    milling, imaging = add_action("milling", "a"), add_action("imaging", "b")
+    excluding = replace(fi, hint=replace(fi.hint, action_type_exclude=("milling",)))
+    subclass = type("SubMilling", (type(milling),), {})
+    milling.__class__ = subclass
+
+    names = choices_for(excluding, ChoiceContext(actions=(milling, imaging)))
+
+    assert names == [imaging.name]
+
+
 @pytest.mark.parametrize("name", ["count", "leaf", "area", "notes", "window"])
 def test_choices_for_rejects_fields_without_choices(
     choice_context: ChoiceContext, name: str

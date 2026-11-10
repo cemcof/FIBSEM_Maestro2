@@ -200,6 +200,9 @@ class ActionPanel(QWidget):
             (self._policy.changed, self._on_permissions_changed),
             (self._session.action_renamed, self._on_action_event),
             (self._session.action_settings_changed, self._on_action_event),
+            # dynamic defaults may be computed from any action's settings
+            (self._session.action_settings_changed, self._on_settings_changed),
+            (self._session.structure_changed, self._form.refresh_defaults),
             (self._session.action_props_changed, self._on_action_event),
             (self._session.action_state_changed, self._on_action_event),
             (self._run.action_finished, self._on_action_event),
@@ -229,6 +232,11 @@ class ActionPanel(QWidget):
     def _on_workflow_reset(self) -> None:
         self._render_header()
         self._form.refresh_overlays()
+        self._form.refresh_defaults()
+
+    def _on_settings_changed(self, action: object) -> None:
+        _ = action
+        self._form.refresh_defaults()
 
     def _on_reset_clicked(self) -> None:
         answer = QMessageBox.question(

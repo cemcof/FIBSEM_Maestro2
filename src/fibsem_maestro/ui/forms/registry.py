@@ -14,7 +14,7 @@ and `connect_leaf`.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Protocol
 
 from fibsem_maestro.core.registry import RegistryError
@@ -26,6 +26,7 @@ from fibsem_maestro.ui.forms.editors.action_multi_select import (
 from fibsem_maestro.ui.forms.editors.action_select import ActionSelectWidget
 from fibsem_maestro.ui.forms.editors.bool import BoolWidget
 from fibsem_maestro.ui.forms.editors.detail_band import DetailBandWidget
+from fibsem_maestro.ui.forms.editors.dynamic_default import DynamicDefaultWidget
 from fibsem_maestro.ui.forms.editors.enum import EnumWidget
 from fibsem_maestro.ui.forms.editors.float import FloatWidget
 from fibsem_maestro.ui.forms.editors.float_tuple import FloatTupleWidget
@@ -37,6 +38,7 @@ from fibsem_maestro.ui.forms.editors.optional import OptionalWidget
 from fibsem_maestro.ui.forms.editors.range_pair import RangePairWidget
 from fibsem_maestro.ui.forms.editors.string import StringWidget
 from fibsem_maestro.ui.forms.editors.text_area import TextAreaWidget
+from fibsem_maestro.ui.forms.scope import resolve_path
 from fibsem_maestro.ui.schema.choices import choices_for
 from fibsem_maestro.ui.schema.field_type import (
     BoolType,
@@ -55,6 +57,7 @@ from fibsem_maestro.ui.schema.field_type import (
 )
 
 if TYPE_CHECKING:
+    from fibsem_maestro.settings.dynamic_default import DynamicDefault
     from fibsem_maestro.ui.forms.context import FormContext
     from fibsem_maestro.ui.forms.editors.object import ObjectWidget
     from fibsem_maestro.ui.forms.editors.union import DiscriminatedUnionWidget
@@ -215,7 +218,9 @@ class EditorRegistry:
         Build the editor of a field.
 
         A hinted field uses its hint's factory, otherwise its field type's
-        factory, otherwise the YAML text-area fallback.
+        factory, otherwise the YAML text-area fallback. A field with a dynamic
+        default gets that editor, built as a required field, inside a
+        `DynamicDefaultWidget`.
 
         Args:
             request: The field and its build environment.
@@ -224,9 +229,55 @@ class EditorRegistry:
             The final editor, optional wrapping applied and `on_change` connected.
         """
         fi = request.field
+        if fi.dynamic_default is not None:
+            return self._create_dynamic(request, fi.dynamic_default)
         if fi.hint is not None:
             return self._hints.get(fi.hint.widget, _hinted_text_area)(request)
         return self._types.get(type(fi.type), _text_area)(request)
+
+    def _create_dynamic(
+        self, request: EditorRequest, declared: DynamicDefault
+    ) -> FieldEditor[Any]:
+        """
+        Build the editor of a field with a dynamic default.
+
+        The default is computed from the live object holding the field, so it
+        cannot be computed in a value-only subtree (or a detached form).
+
+        Args:
+            request: The field and its build environment.
+            declared: The field's dynamic default.
+
+        Returns:
+            The editor, connected and registered for `Form.refresh_defaults`.
+        """
+        fi = request.field
+        # None means "follow the default", never "no value": no optional checkbox
+        inner = self.create(
+            replace(
+                request,
+                field=replace(fi, optional=False, dynamic_default=None),
+                value=None,
+                on_change=noop,
+            )
+        )
+        scope, ctx = request.scope, request.ctx
+
+        def compute() -> Any:
+            owner = (
+                resolve_path(scope.root, scope.owner)
+                if scope.owner is not None
+                else None
+            )
+            return None if owner is None else declared.compute(owner, ctx.settings_of)
+
+        editor = DynamicDefaultWidget(
+            inner, compute, declared.unavailable, declared.source
+        )
+        editor.set_value(request.value)
+        editor.on_change(request.on_change)
+        scope.context.dynamic_defaults.append(editor)
+        return editor
 
 
 def optional_wrap(
@@ -405,6 +456,7 @@ def _action_select(request: EditorRequest) -> FieldEditor[Any]:
     editor = ActionSelectWidget(
         actions=request.ctx.actions,
         type_filter=hint.action_type_filter if hint is not None else [],
+        type_exclude=hint.action_type_exclude if hint is not None else (),
         default=request.value,
         optional=fi.optional,
     )
@@ -428,6 +480,7 @@ def _action_multi_select(request: EditorRequest) -> FieldEditor[Any]:
     editor = ActionMultiSelectWidget(
         actions=request.ctx.actions,
         type_filter=hint.action_type_filter if hint is not None else [],
+        type_exclude=hint.action_type_exclude if hint is not None else (),
         default=request.value,
     )
     request.scope.context.disposers.append(editor.detach)

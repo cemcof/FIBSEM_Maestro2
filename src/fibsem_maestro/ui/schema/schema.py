@@ -10,6 +10,7 @@ from pathlib import Path
 from types import NoneType
 from typing import TYPE_CHECKING, Any, Literal, Union, get_args, get_origin
 
+from fibsem_maestro.settings.dynamic_default import DynamicDefault
 from fibsem_maestro.settings.form_utils import NestedUnion
 from fibsem_maestro.ui.schema._annotated import split_annotated
 from fibsem_maestro.ui.schema._extraction import (
@@ -148,6 +149,9 @@ def get_field_infos(cls: type) -> list[FieldInfo]:
                 unit=field_unit,
                 bounds=extract_bounds(all_extras),
                 type=_classify_field(inner.bare, all_extras),
+                dynamic_default=next(
+                    (e for e in all_extras if isinstance(e, DynamicDefault)), None
+                ),
             )
         )
 

@@ -76,7 +76,7 @@ def link_pairs() -> list[tuple[str, str, str]]:
     Returns:
         `(linking type key, link field name, linked type key)` for every
         action-selector field (single or multiple) and every registered type
-        it accepts. Set and read such a link with `link_to` and `linked_names`.
+        it offers. Set and read such a link with `link_to` and `linked_names`.
     """
     pairs: list[tuple[str, str, str]] = []
     for key in ACTION_REGISTRY:
@@ -85,7 +85,7 @@ def link_pairs() -> list[tuple[str, str, str]]:
             pairs.extend(
                 (key, link.field_name, target)
                 for target in ACTION_REGISTRY
-                if issubclass(ACTION_REGISTRY.get(target), link.allowed_types)
+                if link.accepts(ACTION_REGISTRY.get(target))
             )
     return pairs
 

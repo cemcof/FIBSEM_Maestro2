@@ -3,33 +3,28 @@
 
 from typing import TYPE_CHECKING
 
-import numpy as np
-
 from fibsem_maestro.action.action import Action
 from fibsem_maestro.action.outcome import Produced, StepOutcome
 from fibsem_maestro.action.registry import ACTION_REGISTRY
 from fibsem_maestro.action.state import ActionState
 from fibsem_maestro.core.beam_shift import BeamShift
 from fibsem_maestro.core.beam_type import BeamType
-from fibsem_maestro.core.direction import Direction
-from fibsem_maestro.milling.milling import Milling
 from fibsem_maestro.post_milling_correction.error import PostMillingCorrectionError
 from fibsem_maestro.properties.beam_properties import BeamProperties
 from fibsem_maestro.properties.global_properties import GlobalProperties
+from fibsem_maestro.settings.dynamic_default import effective_value
+from fibsem_maestro.settings.milling_settings import MillingSettings
 from fibsem_maestro.settings.post_milling_correction_settings import (
-    DynamicFocusMode,
-    ManualMode,
     PostMillingCorrectionSettings,
 )
 
 if TYPE_CHECKING:
     from fibsem_maestro.microscope.abstract_control.beam_control import BeamControl
 
-_ION_ELECTRON_ANGLE_RAD = float(np.deg2rad(52.0))
-"""Angle between the ion and electron beams."""
-
 _WORKING_DISTANCE = "working_distance"
 _BEAM_SHIFT = "beam_shift"
+_Y_CORRECTION = "y_correction"
+_WD_CORRECTION = "wd_correction"
 
 
 class PostMillingCorrectionState(ActionState):
@@ -49,8 +44,9 @@ class PostMillingCorrection(
     Every run adds the shifts of one milling step to the upcoming properties of
     each corrected action, on the action's beam: the vertical image shift (as
     beam shift) and the working-distance change. Any action working on a beam
-    can be corrected, as long as it collects the corrected properties. The
-    dynamic mode assumes the corrected actions image with the electron beam.
+    can be corrected, as long as it collects the corrected properties. Shifts
+    not set follow the geometry of the linked milling, which assumes the
+    corrected actions image with the electron beam.
 
     The corrections accumulate, since every action carries its properties on to the next slice.
 
@@ -89,13 +85,16 @@ class PostMillingCorrection(
 
     def preparation_issues(self) -> list[str]:
         """
-        Report a missing milling, and corrected actions that cannot take the correction.
+        Report a missing default correction, and corrected actions that cannot take the correction.
+
+        Uses the settings only, never the stored properties: a corrected action
+        that collects the corrected properties also stores them once prepared.
 
         Returns:
             Human-readable problems; empty if the correction is ready.
         """
         issues: list[str] = []
-        if isinstance(self._settings.correction_mode, DynamicFocusMode):
+        if self._follows_default():
             issues.extend(self._milling_issues())
 
         names = self._settings.corrected_actions
@@ -111,16 +110,41 @@ class PostMillingCorrection(
                 issues.extend(self._target_issues(target))
         return issues
 
+    def _follows_default(self) -> bool:
+        """Whether a correction follows its default, computed from the linked milling."""
+        return (
+            self._settings.y_correction is None or self._settings.wd_correction is None
+        )
+
     def _milling_issues(self) -> list[str]:
+        """
+        The reasons the default corrections cannot be computed.
+
+        Returns:
+            Human-readable problems with the linked milling; empty if it is usable.
+        """
         name = self._settings.linked_milling
         if not name:
-            return ["No milling is linked."]
-        linked = next((a for a in self._actions if a.name == name), None)
+            return ["No milling is linked to compute the default correction from."]
+        linked = self._settings_of(name)
         if linked is None:
             return [f"The linked milling '{name}' does not exist."]
-        if not isinstance(linked, Milling):
+        if not isinstance(linked, MillingSettings):
             return [f"The linked action '{name}' is not a milling."]
         return []
+
+    def _settings_of(self, name: str) -> object | None:
+        """
+        The settings of a workflow action, for computing the default corrections.
+
+        Args:
+            name: The action's name.
+
+        Returns:
+            Its settings, or None if the workflow has no such action.
+        """
+        action = next((a for a in self._actions if a.name == name), None)
+        return None if action is None else action.settings
 
     def _target_issues(self, target: Action) -> list[str]:
         """
@@ -144,17 +168,21 @@ class PostMillingCorrection(
         ]
 
     def _corrected_property_names(self) -> list[str]:
-        """The properties every run may change: those of the non-zero corrections."""
-        match self._settings.correction_mode:
-            case ManualMode() as mode:
-                names: list[str] = []
-                if mode.y_correction:
-                    names.append(_BEAM_SHIFT)
-                if mode.wd_correction:
-                    names.append(_WORKING_DISTANCE)
-                return names
-            case DynamicFocusMode():
-                return [_BEAM_SHIFT, _WORKING_DISTANCE]
+        """
+        The properties every run may change: those of the non-zero corrections.
+
+        A correction whose default cannot be computed counts as non-zero.
+        """
+        y_correction, wd_correction = (
+            effective_value(self._settings, name, self._settings_of)
+            for name in (_Y_CORRECTION, _WD_CORRECTION)
+        )
+        names: list[str] = []
+        if y_correction is None or y_correction:
+            names.append(_BEAM_SHIFT)
+        if wd_correction is None or wd_correction:
+            names.append(_WORKING_DISTANCE)
+        return names
 
     def _run_step(self) -> StepOutcome:
         y_correction, wd_correction = self._correction()
@@ -175,30 +203,25 @@ class PostMillingCorrection(
 
     def _correction(self) -> tuple[float, float]:
         """
-        The shifts of one run.
+        The shifts of one run: the values set, or else their defaults.
 
         Returns:
             The vertical image shift and the working-distance change, both in nm.
-        """
-        match self._settings.correction_mode:
-            case ManualMode() as mode:
-                return mode.y_correction, mode.wd_correction
-            case DynamicFocusMode():
-                return self._geometric_correction()
 
-    def _resolve_milling(self) -> Milling:
-        name = self._settings.linked_milling
-        try:
-            milling = self._actions.named(name)
-        except KeyError as e:
+        Raises:
+            PostMillingCorrectionError: If a correction follows its default and
+                the default cannot be computed.
+        """
+        y_correction, wd_correction = (
+            effective_value(self._settings, name, self._settings_of)
+            for name in (_Y_CORRECTION, _WD_CORRECTION)
+        )
+        if y_correction is None or wd_correction is None:
+            problems = " ".join(self._milling_issues())
             raise PostMillingCorrectionError(
-                f"The linked milling '{name}' does not exist."
-            ) from e
-        if not isinstance(milling, Milling):
-            raise PostMillingCorrectionError(
-                f"Linked action is not a Milling action: {milling.name}"
+                f"The default correction cannot be computed: {problems}"
             )
-        return milling
+        return y_correction, wd_correction
 
     def _resolve_targets(self) -> list[Action]:
         """
@@ -216,23 +239,6 @@ class PostMillingCorrection(
                     f"The corrected action '{name}' does not exist."
                 ) from e
         return targets
-
-    def _geometric_correction(self) -> tuple[float, float]:
-        """
-        Compute the correction from the linked milling's slice distance.
-
-        Returns:
-            The y correction and working-distance correction, both in nm.
-        """
-        milling = self._resolve_milling().settings
-        y_correction = float(np.cos(_ION_ELECTRON_ANGLE_RAD) * milling.slice_distance)
-        wd_correction = float(np.sin(_ION_ELECTRON_ANGLE_RAD) * milling.slice_distance)
-
-        # milling up moves the face the other way
-        if milling.milling_direction is Direction.UP:
-            y_correction, wd_correction = -y_correction, -wd_correction
-
-        return y_correction, wd_correction
 
     def _corrected_properties(
         self, target: Action, y_correction: float, wd_correction: float

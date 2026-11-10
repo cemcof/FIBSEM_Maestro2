@@ -11,7 +11,10 @@ from PyQt6.QtWidgets import QAbstractItemView, QListWidget, QListWidgetItem
 
 from fibsem_maestro.ui.forms.editor import FieldEditor
 from fibsem_maestro.ui.forms.issues import FieldValidationError
-from fibsem_maestro.ui.schema.choices import unavailable_action_message
+from fibsem_maestro.ui.schema.choices import (
+    accepts_action_type,
+    unavailable_action_message,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -46,6 +49,8 @@ class ActionMultiSelectWidget(QListWidget, FieldEditor[list[str]]):
     Args:
         actions: The workflow's actions.
         type_filter: Action types to include; actions of other types are omitted.
+        type_exclude: Registry keys of action types omitted even though they
+            pass `type_filter`.
         default: Names of the actions to select initially, if any.
         parent: The parent widget, if any.
     """
@@ -54,6 +59,7 @@ class ActionMultiSelectWidget(QListWidget, FieldEditor[list[str]]):
         self,
         actions: ActionCatalog,
         type_filter: Sequence[type[Action]],
+        type_exclude: Sequence[str] = (),
         default: list[str] | None = None,
         parent: QWidget | None = None,
     ) -> None:
@@ -61,6 +67,7 @@ class ActionMultiSelectWidget(QListWidget, FieldEditor[list[str]]):
         FieldEditor.__init__(self)
         self._catalog = actions
         self._type_filter = tuple(type_filter)
+        self._type_exclude = tuple(type_exclude)
         # one per row, in row order
         self._entries: list[_Entry] = []
 
@@ -108,7 +115,11 @@ class ActionMultiSelectWidget(QListWidget, FieldEditor[list[str]]):
             names: The names to select.
         """
         wanted = dict.fromkeys(names)
-        offered = [a for a in actions if isinstance(a, self._type_filter)]
+        offered = [
+            a
+            for a in actions
+            if accepts_action_type(type(a), self._type_filter, self._type_exclude)
+        ]
         offered_names = {a.name for a in offered}
 
         with QSignalBlocker(self):

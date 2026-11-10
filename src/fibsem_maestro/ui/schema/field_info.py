@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from fibsem_maestro.settings.dynamic_default import DynamicDefault
     from fibsem_maestro.settings.form_utils import FieldUnit, FormHint
     from fibsem_maestro.ui.schema.constraints import NumericBounds
     from fibsem_maestro.ui.schema.default import Default
@@ -28,6 +29,9 @@ class FieldInfo:
         unit: A `FieldUnit` from `Annotated[]`, if present.
         bounds: Numeric constraints, or `None` if unconstrained.
         type: The kind-specific descriptor.
+        dynamic_default: How the default of a field following a computed
+            default is computed, or None. Such a field stores None while it
+            follows the default (see `settings.dynamic_default`).
     """
 
     name: str
@@ -39,3 +43,4 @@ class FieldInfo:
     unit: FieldUnit | None
     bounds: NumericBounds | None
     type: FieldType
+    dynamic_default: DynamicDefault | None = None

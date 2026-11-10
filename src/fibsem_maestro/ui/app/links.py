@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from fibsem_maestro.settings.form_utils import WidgetType
+from fibsem_maestro.ui.schema.choices import accepts_action_type
 from fibsem_maestro.ui.schema.schema import get_field_infos
 
 if TYPE_CHECKING:
@@ -34,6 +35,8 @@ class ActionLink:
         field_name: Name of the settings field holding the linked action's name
             (or names).
         allowed_types: Action classes the link may name.
+        excluded_types: Registry keys of action types the link may not name,
+            even though they are among `allowed_types`.
         optional: True if the field may hold None (no link).
         many: True if the field holds a list of names.
     """
@@ -42,6 +45,19 @@ class ActionLink:
     allowed_types: tuple[type[Action], ...]
     optional: bool
     many: bool = False
+    excluded_types: tuple[str, ...] = ()
+
+    def accepts(self, action_type: type[Action]) -> bool:
+        """
+        Whether the link may name actions of a type.
+
+        Args:
+            action_type: The action's class.
+
+        Returns:
+            True if the link's selector offers actions of `action_type`.
+        """
+        return accepts_action_type(action_type, self.allowed_types, self.excluded_types)
 
     def names(self, settings: object) -> list[str]:
         """
@@ -79,6 +95,7 @@ def iter_links(settings: object) -> Iterator[ActionLink]:
             allowed_types=tuple(fi.hint.action_type_filter),
             optional=fi.optional,
             many=fi.hint.widget is WidgetType.MULTI_ACTION_SELECTOR,
+            excluded_types=fi.hint.action_type_exclude,
         )
 
 

@@ -16,8 +16,7 @@ from fibsem_maestro.post_milling_correction.correction import PostMillingCorrect
 from fibsem_maestro.post_milling_correction.error import PostMillingCorrectionError
 from fibsem_maestro.properties.global_properties import GlobalProperties
 from fibsem_maestro.settings.post_milling_correction_settings import (
-    DynamicFocusMode,
-    ManualMode,
+    PostMillingCorrectionSettings,
 )
 from fibsem_maestro.settings.property_names import PropertyNames
 from fibsem_maestro.workflow.propagations import PropagationRule, Propagations
@@ -81,20 +80,34 @@ def add_imaging(add_prepared: Callable[..., Action]) -> Callable[..., Action]:
 
 @pytest.fixture
 def add_correction(add_prepared: Callable[..., Action]) -> Callable[..., Action]:
-    """Add a post-milling correction, by default a manual one."""
+    """Add a post-milling correction, by default with both shifts set (None follows the default)."""
 
     def add(
-        corrected: list[str], mode: ManualMode | DynamicFocusMode | None = None
+        corrected: list[str],
+        y: float | None = Y_CORRECTION,
+        wd: float | None = WD_CORRECTION,
+        **settings: object,
     ) -> Action:
         return add_prepared(
             "post_milling_correction",
             "correction",
             corrected_actions=corrected,
-            correction_mode=mode
-            or ManualMode(y_correction=Y_CORRECTION, wd_correction=WD_CORRECTION),
+            y_correction=y,
+            wd_correction=wd,
+            **settings,
         )
 
     return add
+
+
+def geometric(slice_distance: float, direction: Direction) -> tuple[float, float]:
+    """The shifts of one slice, seen by the electron beam at 52 degrees to the ion beam (nm)."""
+    sign = -1.0 if direction is Direction.UP else 1.0
+    angle = math.radians(52.0)
+    return (
+        sign * slice_distance * math.cos(angle),
+        sign * slice_distance * math.sin(angle),
+    )
 
 
 def upcoming(action: Action) -> BeamProperties:
@@ -254,7 +267,7 @@ def test_zero_correction_patches_nothing(
     add_correction: Callable[..., Action],
 ) -> None:
     add_imaging("imaging")
-    correction = add_correction(["imaging"], ManualMode())
+    correction = add_correction(["imaging"], y=0.0, wd=0.0)
 
     outcome = correction.execute()
 
@@ -267,7 +280,7 @@ def test_manual_correction_patches_only_its_non_zero_part(
     add_correction: Callable[..., Action],
 ) -> None:
     add_imaging("imaging")
-    correction = add_correction(["imaging"], ManualMode(wd_correction=WD_CORRECTION))
+    correction = add_correction(["imaging"], y=0.0)
 
     outcome = correction.execute()
 
@@ -277,27 +290,18 @@ def test_manual_correction_patches_only_its_non_zero_part(
     )
 
 
-@pytest.mark.parametrize(
-    ("direction", "sign"), [(Direction.DOWN, 1.0), (Direction.UP, -1.0)]
-)
-def test_dynamic_correction_follows_the_milling_geometry(
+@pytest.mark.parametrize("direction", [Direction.DOWN, Direction.UP])
+def test_default_correction_follows_the_milling_geometry(
     add_prepared: Callable[..., Action],
     add_imaging: Callable[..., Action],
     add_correction: Callable[..., Action],
     direction: Direction,
-    sign: float,
 ) -> None:
     add_prepared("milling", "milling", slice_distance=10.0, milling_direction=direction)
     imaging = add_imaging("imaging")
-    correction = add_correction(["imaging"], DynamicFocusMode())
-    correction.settings.linked_milling = "milling"
-    angle = math.radians(52.0)
-    expected = shifted(
-        upcoming(imaging),
-        runs=1,
-        y=sign * 10.0 * math.cos(angle),
-        wd=sign * 10.0 * math.sin(angle),
-    )
+    correction = add_correction(["imaging"], y=None, wd=None, linked_milling="milling")
+    y, wd = geometric(10.0, direction)
+    expected = shifted(upcoming(imaging), runs=1, y=y, wd=wd)
 
     outcome = correction.execute()
 
@@ -305,6 +309,91 @@ def test_dynamic_correction_follows_the_milling_geometry(
     patch = outcome.patches["imaging"].electron_beam
     assert patch is not None
     assert corrected_values(patch) == pytest.approx(expected)
+
+
+def test_default_correction_follows_later_changes_of_the_milling(
+    add_prepared: Callable[..., Action],
+    add_imaging: Callable[..., Action],
+    add_correction: Callable[..., Action],
+) -> None:
+    milling = add_prepared("milling", "milling", slice_distance=10.0)
+    imaging = add_imaging("imaging")
+    correction = add_correction(["imaging"], y=None, wd=None, linked_milling="milling")
+
+    # nothing of the old slice distance is kept by the correction
+    milling.settings.slice_distance = 30.0
+    y, wd = geometric(30.0, Direction.DOWN)
+    expected = shifted(upcoming(imaging), runs=1, y=y, wd=wd)
+
+    outcome = correction.execute()
+
+    assert isinstance(outcome, Produced)
+    patch = outcome.patches["imaging"].electron_beam
+    assert patch is not None
+    assert corrected_values(patch) == pytest.approx(expected)
+
+
+def test_value_set_replaces_only_its_own_default(
+    add_prepared: Callable[..., Action],
+    add_imaging: Callable[..., Action],
+    add_correction: Callable[..., Action],
+) -> None:
+    add_prepared("milling", "milling", slice_distance=10.0)
+    imaging = add_imaging("imaging")
+    correction = add_correction(
+        ["imaging"], y=Y_CORRECTION, wd=None, linked_milling="milling"
+    )
+    _, wd = geometric(10.0, Direction.DOWN)
+    expected = shifted(upcoming(imaging), runs=1, y=Y_CORRECTION, wd=wd)
+
+    outcome = correction.execute()
+
+    assert isinstance(outcome, Produced)
+    patch = outcome.patches["imaging"].electron_beam
+    assert patch is not None
+    assert corrected_values(patch) == pytest.approx(expected)
+
+
+def test_default_correction_without_a_milling_fails(
+    add_imaging: Callable[..., Action],
+    add_correction: Callable[..., Action],
+) -> None:
+    add_imaging("imaging")
+    correction = add_correction(["imaging"], wd=None)
+
+    with pytest.raises(PostMillingCorrectionError, match="No milling is linked"):
+        correction.execute()
+
+
+def test_set_corrections_need_no_milling(
+    add_imaging: Callable[..., Action],
+    add_correction: Callable[..., Action],
+) -> None:
+    add_imaging("imaging")
+    correction = add_correction(["imaging"])
+
+    assert correction.preparation_issues() == []
+    assert isinstance(correction.execute(), Produced)
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        (
+            {"type": "manual", "y_correction": 3.0, "wd_correction": 4.0},
+            (3.0, 4.0),
+        ),
+        ({"type": "dynamic_focus"}, (None, None)),
+    ],
+)
+def test_settings_with_a_correction_mode_keep_their_corrections(
+    mode: dict[str, object], expected: tuple[float | None, float | None]
+) -> None:
+    settings = PostMillingCorrectionSettings.model_validate(
+        {"linked_milling": "milling", "correction_mode": mode}
+    )
+
+    assert (settings.y_correction, settings.wd_correction) == expected
 
 
 def test_correction_fails_if_a_target_stores_no_value_to_correct(
@@ -329,7 +418,7 @@ def ready(
     """A correction of `imaging` that is ready to run."""
     add_imaging("imaging")
     add_prepared("milling", "milling")
-    return add_correction(["imaging"])
+    return add_correction(["imaging"], linked_milling="milling")
 
 
 def test_ready_correction_reports_no_issues(ready: Action) -> None:
@@ -344,42 +433,51 @@ def test_ready_correction_reports_no_issues(ready: Action) -> None:
             {"corrected_actions": ["imaging", "ghost"]},
             "The corrected action 'ghost' does not exist.",
         ),
-        ({"correction_mode": DynamicFocusMode()}, "No milling is linked."),
         (
-            {"correction_mode": DynamicFocusMode(), "linked_milling": "ghost"},
+            {"y_correction": None, "linked_milling": ""},
+            "No milling is linked to compute the default correction from.",
+        ),
+        (
+            {"wd_correction": None, "linked_milling": "ghost"},
             "The linked milling 'ghost' does not exist.",
         ),
         (
-            {"correction_mode": DynamicFocusMode(), "linked_milling": "imaging"},
+            {"y_correction": None, "linked_milling": "imaging"},
             "The linked action 'imaging' is not a milling.",
         ),
+        # a milling is only needed for a default
+        ({"linked_milling": "ghost"}, None),
     ],
 )
 def test_correction_reports_what_it_cannot_correct(
-    ready: Action, change: dict[str, object], issue: str
+    ready: Action, change: dict[str, object], issue: str | None
 ) -> None:
     for name, value in change.items():
         setattr(ready.settings, name, value)
 
-    assert ready.preparation_issues() == [issue]
+    assert ready.preparation_issues() == ([] if issue is None else [issue])
 
 
 @pytest.mark.parametrize(
-    ("mode", "missing"),
+    ("y", "wd", "missing"),
     [
-        (ManualMode(wd_correction=WD_CORRECTION), ["working_distance"]),
-        (ManualMode(y_correction=Y_CORRECTION), ["beam_shift"]),
-        (ManualMode(), []),
+        (0.0, WD_CORRECTION, ["working_distance"]),
+        (Y_CORRECTION, 0.0, ["beam_shift"]),
+        (0.0, 0.0, []),
+        # the default, from the linked milling, is not zero
+        (None, 0.0, ["beam_shift"]),
     ],
 )
 def test_correction_requires_targets_to_collect_what_it_corrects(
     add_prepared: Callable[..., Action],
     add_correction: Callable[..., Action],
-    mode: ManualMode,
+    y: float | None,
+    wd: float | None,
     missing: list[str],
 ) -> None:
+    add_prepared("milling", "milling")
     add_prepared("imaging", "imaging", properties_to_collect=PropertyNames())
-    correction = add_correction(["imaging"], mode)
+    correction = add_correction(["imaging"], y=y, wd=wd, linked_milling="milling")
 
     assert correction.preparation_issues() == [
         f"'imaging' does not collect '{name}', so it cannot be corrected."
@@ -411,3 +509,17 @@ def test_workflow_drops_propagation_rules_from_or_to_a_correction(
 
     assert isinstance(loaded.actions[2], PostMillingCorrection)
     assert loaded.propagations.rules == [PropagationRule("imaging", ["other"], wd)]
+
+
+def test_default_that_cannot_be_computed_counts_as_a_correction(
+    add_prepared: Callable[..., Action],
+    add_correction: Callable[..., Action],
+) -> None:
+    add_prepared("imaging", "imaging", properties_to_collect=PropertyNames())
+    # without a milling, the default may be anything once one is linked
+    correction = add_correction(["imaging"], y=None, wd=0.0)
+
+    assert correction.preparation_issues() == [
+        "No milling is linked to compute the default correction from.",
+        "'imaging' does not collect 'beam_shift', so it cannot be corrected.",
+    ]

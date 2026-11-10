@@ -26,15 +26,25 @@ from gui_testkit.driving import (
 )
 from gui_testkit.forms import children
 from gui_testkit.workflows import simulated_workflow
-from PyQt6.QtWidgets import QDialogButtonBox, QLabel, QMessageBox, QWidget
+from PyQt6.QtWidgets import (
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QLabel,
+    QMessageBox,
+    QWidget,
+)
 
 from fibsem_maestro.action.registry import ACTION_REGISTRY
 from fibsem_maestro.core.area import RelativeArea
+from fibsem_maestro.core.direction import Direction
 from fibsem_maestro.core.registry import Registry
 from fibsem_maestro.milling.milling import MillingState
 from fibsem_maestro.properties.beam_properties import BeamProperties
 from fibsem_maestro.properties.global_properties import GlobalProperties
 from fibsem_maestro.settings.form_utils import AreaOverlay
+from fibsem_maestro.settings.post_milling_correction_settings import (
+    geometric_correction,
+)
 from fibsem_maestro.ui.actions_ui import spec as actions_ui_spec
 from fibsem_maestro.ui.actions_ui.default_tools import DEFAULT_TOOLS, TEST_TOOL
 from fibsem_maestro.ui.actions_ui.spec import (
@@ -48,9 +58,13 @@ from fibsem_maestro.ui.app.edit_policy import permissions_for
 from fibsem_maestro.ui.app.files import WorkflowFiles
 from fibsem_maestro.ui.app.run_state import AppState
 from fibsem_maestro.ui.app.session import WorkflowSession
+from fibsem_maestro.ui.forms.editors.action_multi_select import (
+    ActionMultiSelectWidget,
+)
 from fibsem_maestro.ui.forms.editors.area_select.widget import AreaSelectWidget
+from fibsem_maestro.ui.forms.editors.dynamic_default import DynamicDefaultWidget
 from fibsem_maestro.ui.forms.editors.field_label import FieldLabel
-from fibsem_maestro.ui.forms.editors.object import RESETS_STATE_MARK
+from fibsem_maestro.ui.forms.editors.object import RESETS_STATE_MARK_HTML
 from fibsem_maestro.ui.schema.labels import field_name_to_label
 from fibsem_maestro.ui.views.action_panel.header import action_header_view
 from fibsem_maestro.ui.widgets.icons import ICON_TEST
@@ -525,7 +539,7 @@ def test_action_panel_marks_the_settings_resetting_the_state(app: Composition) -
     marked = {
         label.text().split(" <")[0]
         for label in children(panel_of(app, milling).form.widget, FieldLabel)
-        if RESETS_STATE_MARK in label.text()
+        if RESETS_STATE_MARK_HTML in label.text()
     }
 
     assert marked == {field_name_to_label(name) for name in milling.state_fields()}
@@ -621,3 +635,74 @@ def test_action_panel_edit_asks_before_saving_props_resetting_the_state(
         answering(PropertiesDialog, save),
     ):
         click_tool(app, target, "edit")
+
+
+def _correction_linked_to_milling(app: Composition) -> tuple[Action, Action]:
+    """A milling, and a correction following its geometry, shown."""
+    milling = app.commands.add_action("milling", "milling")
+    correction = app.commands.add_action("post_milling_correction", "correction")
+    correction.settings.linked_milling = "milling"
+    app.commands.settings_committed(correction)
+    shown(app, correction)
+    return milling, correction
+
+
+def _shown_correction(app: Composition, correction: Action, name: str) -> float:
+    editor = panel_of(app, correction).form.widget.field_widget(name)
+    assert isinstance(editor, DynamicDefaultWidget)
+    return editor.inner.get_value()
+
+
+def test_action_panel_correction_shows_the_defaults_of_the_milling_as_it_changes(
+    app: Composition,
+) -> None:
+    milling, correction = _correction_linked_to_milling(app)
+
+    # edited while the correction's panel is cached but not shown
+    shown(app, milling)
+    milling.settings.slice_distance = 40.0
+    milling.settings.milling_direction = Direction.UP
+    app.commands.settings_committed(milling)
+
+    expected = geometric_correction(milling.settings)
+    shown_now = tuple(
+        _shown_correction(app, correction, name)
+        for name in ("y_correction", "wd_correction")
+    )
+    assert shown_now == pytest.approx(expected, abs=1e-6)
+    # still following: nothing was stored
+    assert correction.settings.y_correction is None
+    assert correction.settings.wd_correction is None
+
+
+def test_action_panel_correction_set_value_no_longer_follows_the_milling(
+    app: Composition,
+) -> None:
+    milling, correction = _correction_linked_to_milling(app)
+    editor = panel_of(app, correction).form.widget.field_widget("y_correction")
+    assert isinstance(editor, QWidget)
+    spin = first_spin_box(editor)
+    assert isinstance(spin, QDoubleSpinBox)
+    spin.setValue(3.0)
+
+    milling.settings.slice_distance = 40.0
+    app.commands.settings_committed(milling)
+
+    assert correction.settings.y_correction == 3.0
+    assert _shown_correction(app, correction, "y_correction") == 3.0
+
+
+def test_action_panel_correction_offers_no_correction_to_correct(
+    app: Composition,
+) -> None:
+    app.commands.add_action("imaging", "imaging")
+    app.commands.add_action("post_milling_correction", "other")
+    _, correction = _correction_linked_to_milling(app)
+
+    selector = panel_of(app, correction).form.widget.field_widget("corrected_actions")
+    assert isinstance(selector, ActionMultiSelectWidget)
+    offered = [
+        item.text() for i in range(selector.count()) if (item := selector.item(i))
+    ]
+
+    assert offered == ["imaging", "milling"]

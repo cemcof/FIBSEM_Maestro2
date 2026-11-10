@@ -13,11 +13,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from PyQt6 import sip
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from fibsem_maestro.ui.forms.commit import FieldCommitter
+from fibsem_maestro.ui.forms.defaults import DefaultReset
 from fibsem_maestro.ui.forms.editor import FieldEditor, OnChange, noop
 from fibsem_maestro.ui.forms.editors.bool import BoolWidget
+from fibsem_maestro.ui.forms.editors.dynamic_default import DynamicDefaultWidget
 from fibsem_maestro.ui.forms.editors.enum import EnumWidget
 from fibsem_maestro.ui.forms.editors.float import FloatWidget
 from fibsem_maestro.ui.forms.editors.group import GroupWrapper
@@ -117,9 +120,25 @@ class Form(QObject):
         Enable or disable editing of every field.
 
         Args:
-            read_only: If True, no field can be edited.
+            read_only: If True, no field can be edited or reset to its default.
         """
+        self._context.read_only = read_only
         self._widget.set_read_only(read_only)
+
+    def refresh_defaults(self) -> None:
+        """
+        Show the dynamic defaults as computed now, in the fields following them.
+
+        For defaults computed from other settings, e.g. those of a linked
+        action, which change without any editor of this form noticing. Nothing
+        is written. Does nothing once the form is disposed.
+        """
+        if self._context.disposed:
+            return
+        for editor in self._context.dynamic_defaults:
+            # an editor of a discarded subtree (e.g. a removed list element)
+            if not sip.isdeleted(editor):
+                editor.refresh()
 
     def set_value(self, value: Any) -> None:
         """
@@ -192,6 +211,7 @@ class DetachedForm(QObject):
     ) -> None:
         super().__init__(parent)
         self._widget = widget
+        self._context = context
         context.on_changed(self._on_changed)
 
     @property
@@ -226,8 +246,9 @@ class DetachedForm(QObject):
         Enable or disable editing of every field.
 
         Args:
-            read_only: If True, no field can be edited.
+            read_only: If True, no field can be edited or reset to its default.
         """
+        self._context.read_only = read_only
         self._widget.set_read_only(read_only)
 
     def _on_changed(self) -> None:
@@ -371,6 +392,8 @@ class _Recursion:
 
         Every addressable field's editor is registered in the build context,
         so bindings declared elsewhere in the form can reference it by path.
+        A field with a dynamic default can be reset to follow it from its
+        right-click menu (see `defaults.DefaultReset`).
 
         Args:
             cls: The dataclass or model class.
@@ -416,6 +439,8 @@ class _Recursion:
                 resets_state=scope.path == () and fi.name in context.form.state_fields,
             )
             editor.on_issues_changed(context.notify_issues_changed)
+            if isinstance(editor, DynamicDefaultWidget):
+                DefaultReset(fi, editor, obj.field_label(fi.name), context)
             editors[fi.name] = editor
             if (path := field_scope.dotted) is not None:
                 context.editors[path] = editor

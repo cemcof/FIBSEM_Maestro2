@@ -53,6 +53,23 @@ class FormContext:
             pattern_types=self.pattern_types,
         )
 
+    def settings_of(self, name: str) -> object | None:
+        """
+        The settings of a workflow action, for computing dynamic defaults.
+
+        A `settings.dynamic_default.SettingsLookup`.
+
+        Args:
+            name: The action's name.
+
+        Returns:
+            Its settings, or None outside a workflow or if there is no such action.
+        """
+        if self.actions is None:
+            return None
+        action = next((a for a in self.actions.actions if a.name == name), None)
+        return None if action is None else action.settings
+
     def warn(self, message: str) -> None:
         """
         Log a build-time warning, if a logger was supplied.

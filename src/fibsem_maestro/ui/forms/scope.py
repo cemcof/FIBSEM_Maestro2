@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from fibsem_maestro.ui.forms.commit import FieldCommitter
     from fibsem_maestro.ui.forms.context import FormContext
     from fibsem_maestro.ui.forms.editor import FieldEditor, OnChange
+    from fibsem_maestro.ui.forms.editors.dynamic_default import DynamicDefaultWidget
     from fibsem_maestro.ui.forms.wiring import FollowerBinding, OverlayBinding
 
 T = TypeVar("T")
@@ -63,6 +64,10 @@ class BuildContext:
             the whole tree exists.
         committers: Every committer, checked once the whole form exists so a
             stored value the form cannot show is marked at once.
+        dynamic_defaults: Editors of fields with a dynamic default, refreshed
+            by `Form.refresh_defaults`.
+        read_only: True while the form allows no edits (`Form.set_read_only`);
+            no field can then be reset to its default.
         disposers: Callables releasing what the form registered outside itself
             (settings hooks, catalog connections); run by `dispose`.
         disposed: True once `dispose` ran. A disposed form is inert: its
@@ -76,6 +81,8 @@ class BuildContext:
     overlays: list[OverlayBinding] = field(default_factory=list)
     followers: list[FollowerBinding] = field(default_factory=list)
     committers: list[FieldCommitter] = field(default_factory=list)
+    dynamic_defaults: list[DynamicDefaultWidget[Any]] = field(default_factory=list)
+    read_only: bool = False
     disposers: list[Callable[[], None]] = field(default_factory=list)
     disposed: bool = False
     _issue_listeners: list[OnChange] = field(default_factory=list, repr=False)

@@ -26,13 +26,20 @@ T = TypeVar("T")
 _ISSUE_COLORS = {Severity.ERROR: "#e05252", Severity.WARNING: "#e0a030"}
 """Text colour of a field's label and message, by the most severe issue."""
 
-RESETS_STATE_MARK = "\u21ba"
+RESETS_STATE_MARK = "R"
 """Shown after the label of a field whose change resets the action's internal state."""
 
 RESETS_STATE_NOTE = "Changing this resets the action's internal state."
 """Added to the tooltip of a field whose change resets the action's internal state."""
 
-_RESETS_STATE_COLOR = "#e0a030"
+_RESETS_STATE_COLOR = "#8fa6b8"
+"""A quiet grey: the mark informs, it is not a control."""
+
+RESETS_STATE_MARK_HTML = (
+    f'<span style="color: {_RESETS_STATE_COLOR}; font-size: 7pt; font-weight: bold;">'
+    f"{RESETS_STATE_MARK}</span>"
+)
+"""The mark as appended to the label's rich text."""
 
 
 @dataclass(frozen=True)
@@ -141,10 +148,7 @@ class ObjectWidget(QWidget, FieldEditor[T]):
         )
         if resets_state:
             label_widget.setTextFormat(Qt.TextFormat.RichText)
-            label_widget.setText(
-                f"{escape(label)} "
-                f'<span style="color: {_RESETS_STATE_COLOR};">{RESETS_STATE_MARK}</span>'
-            )
+            label_widget.setText(f"{escape(label)} {RESETS_STATE_MARK_HTML}")
             description = "\n\n".join(filter(None, (description, RESETS_STATE_NOTE)))
         if description:
             label_widget.setToolTip(description)
@@ -163,6 +167,8 @@ class ObjectWidget(QWidget, FieldEditor[T]):
         self._fields[name] = widget
         self._rows[name] = _FieldRow(label_widget, message)
         widget.on_issues_changed(partial(self._show_issues, name))
+        # issues the editor reported while it was built
+        self._show_issues(name)
 
     def _show_issues(self, name: str) -> None:
         """
@@ -292,6 +298,19 @@ class ObjectWidget(QWidget, FieldEditor[T]):
         """
         for w in self._fields.values():
             w.set_read_only(read_only)
+
+    def field_label(self, name: str) -> FieldLabel | None:
+        """
+        Return the label of one field.
+
+        Args:
+            name: The field key given to `add_field`.
+
+        Returns:
+            The field's label, or None if this form has no such field.
+        """
+        row = self._rows.get(name)
+        return None if row is None else row.label
 
     def field_widget(self, name: str) -> FieldEditor[Any] | None:
         """

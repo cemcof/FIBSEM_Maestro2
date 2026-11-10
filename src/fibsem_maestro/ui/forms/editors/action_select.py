@@ -10,6 +10,7 @@ from PyQt6.QtCore import QSignalBlocker
 
 from fibsem_maestro.ui.forms.editor import FieldEditor
 from fibsem_maestro.ui.forms.editors._no_scroll import NoScrollComboBox
+from fibsem_maestro.ui.schema.choices import accepts_action_type
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -30,6 +31,8 @@ class ActionSelectWidget(NoScrollComboBox, FieldEditor[str | None]):
     Args:
         actions: The workflow's actions.
         type_filter: Action types to include; actions of other types are omitted.
+        type_exclude: Registry keys of action types omitted even though they
+            pass `type_filter`.
         default: Name of the action to select initially, if any.
         optional: If True, add a "(none)" entry allowing an empty selection.
         parent: The parent widget, if any.
@@ -39,6 +42,7 @@ class ActionSelectWidget(NoScrollComboBox, FieldEditor[str | None]):
         self,
         actions: ActionCatalog,
         type_filter: Sequence[type[Action]],
+        type_exclude: Sequence[str] = (),
         default: str | None = None,
         optional: bool = False,
         parent: QWidget | None = None,
@@ -47,6 +51,7 @@ class ActionSelectWidget(NoScrollComboBox, FieldEditor[str | None]):
         FieldEditor.__init__(self)
         self._catalog = actions
         self._type_filter = tuple(type_filter)
+        self._type_exclude = tuple(type_exclude)
         self._optional = optional
         # an optional link to an action that is not (or no longer) offered: kept as
         # the value, so the form never writes None over it
@@ -77,7 +82,7 @@ class ActionSelectWidget(NoScrollComboBox, FieldEditor[str | None]):
 
     def _populate(self, actions: Sequence[Action], default: str | None = None) -> None:
         """
-        Offer exactly the actions passing the type filter, in order, and select `default`.
+        Offer exactly the actions passing the type filter and exclusions, in order, and select `default`.
 
         An optional selector also offers "(none)" first. Selecting `default`
         follows `set_value`.
@@ -90,7 +95,7 @@ class ActionSelectWidget(NoScrollComboBox, FieldEditor[str | None]):
         if self._optional:
             self.addItem("(none)", userData=None)
         for action in actions:
-            if isinstance(action, self._type_filter):
+            if accepts_action_type(type(action), self._type_filter, self._type_exclude):
                 self.addItem(action.name, userData=action)
 
         self.set_value(default)
