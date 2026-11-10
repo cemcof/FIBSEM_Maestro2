@@ -40,9 +40,7 @@ class AutoscriptMicroscopeControl(MicroscopeControl):
 
         # Maestro reads and moves the stage in specimen coordinates with the Z
         # axis unlinked from the working distance
-        stage = self._microscope.specimen.stage
-        stage.set_default_coordinate_system(CoordinateSystem.SPECIMEN)
-        stage.unlink()
+        self._unlink_stage()
         self._txt_log.info(
             "Stage set to specimen coordinates with Z unlinked from the working distance."
         )
@@ -60,6 +58,12 @@ class AutoscriptMicroscopeControl(MicroscopeControl):
             self._txt_log.derive("ion_beam"),
         )
 
+    def _unlink_stage(self):
+        """Unlink the microscope stage and set the default coordinate system to SPECIMEN."""
+        stage = self._microscope.specimen.stage
+        stage.set_default_coordinate_system(CoordinateSystem.SPECIMEN)
+        stage.unlink()
+
     @classmethod
     def provenance(cls) -> Provenance:
         return Provenance.AUTOSCRIPT
@@ -71,6 +75,10 @@ class AutoscriptMicroscopeControl(MicroscopeControl):
 
     @property
     def stage_position(self) -> StagePosition:
+        # we unlink stage every time before reading stage position
+        # in case the user links it back
+        self._unlink_stage()
+
         p = StagePosition.from_stage_position_autoscript(
             self._microscope.specimen.stage.current_position
         )
@@ -110,6 +118,8 @@ class AutoscriptMicroscopeControl(MicroscopeControl):
         return self._manufacturer_properties.allowed()
 
     def try_set_stage_position(self, pos: StagePosition) -> StagePosition:
+        self._unlink_stage()
+
         self._txt_log.debug(f"Current stage position: {self.stage_position}.")
         pos_autoscript = pos.to_stage_position_autoscript()
 
@@ -119,6 +129,8 @@ class AutoscriptMicroscopeControl(MicroscopeControl):
         return self.stage_position
 
     def try_move_stage_position(self, delta: StagePosition) -> StagePosition:
+        self._unlink_stage()
+
         self._txt_log.debug(f"Current stage position: {self.stage_position}.")
 
         delta_autoscript = delta.to_stage_delta_autoscript()
