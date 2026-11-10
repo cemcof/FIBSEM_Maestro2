@@ -20,7 +20,7 @@ from fibsem_maestro.settings.sweeping_settings import (
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from fibsem_maestro.autofocus.sweep_step import SweepDirection, SweepPoint
+    from fibsem_maestro.autofunction.sweep_step import SweepDirection, SweepPoint
     from fibsem_maestro.settings.sweeping_settings import SweepingSettings
 
 

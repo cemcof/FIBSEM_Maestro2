@@ -10,14 +10,14 @@ import pytest
 from pydantic import ValidationError
 
 from fibsem_maestro.action_context.memory import MemoryActionContext
-from fibsem_maestro.autofocus.af_chart import af_chart
-from fibsem_maestro.autofocus.autofocus import Autofocus
-from fibsem_maestro.autofocus.evaluation import InterleavedEvaluation
-from fibsem_maestro.autofocus.result import AutofocusResult
-from fibsem_maestro.autofocus.sweep_space import CircularSweepSpace, LinearSweepSpace
-from fibsem_maestro.autofocus.sweep_step import SweepPoint, SweepStep
-from fibsem_maestro.autofocus.sweeping import Sweeping
-from fibsem_maestro.autofocus.sweeping_strategy import (
+from fibsem_maestro.autofunction.af_chart import af_chart
+from fibsem_maestro.autofunction.autofunction import Autofunction
+from fibsem_maestro.autofunction.evaluation import InterleavedEvaluation
+from fibsem_maestro.autofunction.result import AutofunctionResult
+from fibsem_maestro.autofunction.sweep_space import CircularSweepSpace, LinearSweepSpace
+from fibsem_maestro.autofunction.sweep_step import SweepPoint, SweepStep
+from fibsem_maestro.autofunction.sweeping import Sweeping
+from fibsem_maestro.autofunction.sweeping_strategy import (
     BasicSweepingStrategy,
     InterleavedSweepingStrategy,
     SweepingStrategy,
@@ -26,7 +26,10 @@ from fibsem_maestro.logging.image.plot import Panel, Plot
 from fibsem_maestro.logging.image.plot_element import Bars, Curve, HorizontalLine
 from fibsem_maestro.logging.image.plot_renderer import render_plot
 from fibsem_maestro.logging.text.memory import MemoryTextLogger
-from fibsem_maestro.settings.autofocus_settings import AutofocusSettings, BasicMode
+from fibsem_maestro.settings.autofunction_settings import (
+    AutofunctionSettings,
+    BasicMode,
+)
 from fibsem_maestro.settings.criterion_settings import CriterionSettings
 from fibsem_maestro.settings.sweeping_settings import (
     BasicStrategy as BasicStrategySettings,
@@ -56,13 +59,13 @@ def _results(
     base: SweepPoint,
     sharpness: Any,
     cycles: int = 1,
-) -> list[AutofocusResult]:
+) -> list[AutofunctionResult]:
     """Results of a sweep scored by `sharpness(value)`."""
     values = [
         (rep, v) for rep in range(cycles) for v in strategy.generate(space, base, rep)
     ]
     return [
-        AutofocusResult(sharpness(v), SweepStep(rep, v, i))
+        AutofunctionResult(sharpness(v), SweepStep(rep, v, i))
         for i, (rep, v) in enumerate(values)
     ]
 
@@ -260,21 +263,21 @@ def test_plot_rejects_a_layout_that_does_not_place_every_panel() -> None:
         Plot(panels={"a": Panel(elements=[]), "b": Panel(elements=[])}, layout=[["a"]])
 
 
-def test_2d_autofocus_moves_the_stigmator_onto_the_circle(
+def test_2d_autofunction_moves_the_stigmator_onto_the_circle(
     simulated_microscope: Microscope,
 ) -> None:
     beam = simulated_microscope.electron_beam
     beam.stigmator_x, beam.stigmator_y = 0.1, -0.1
-    settings = AutofocusSettings(
+    settings = AutofunctionSettings(
         mode=BasicMode(
             sweeping=CircularSweepingSettings(radius=0.01, steps=6),
             criterion=CriterionSettings(),
         )
     )
     ctx = MemoryActionContext("af")
-    autofocus = Autofocus("af", simulated_microscope, settings, ctx, Actions())
+    autofunction = Autofunction("af", simulated_microscope, settings, ctx, Actions())
 
-    autofocus.test()
+    autofunction.test()
 
     moved = math.dist((beam.stigmator_x, beam.stigmator_y), (0.1, -0.1))
     assert moved == pytest.approx(0.01)

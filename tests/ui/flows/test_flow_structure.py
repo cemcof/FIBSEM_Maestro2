@@ -67,21 +67,21 @@ def test_flow_rename_keeps_rules_links_and_files(
     qtbot: QtBot, app: Composition
 ) -> None:
     imaging = add_through_dialog(app, "imaging", "imaging")
-    # autofocus is used for its link to an imaging action (an action-selector field)
-    autofocus = add_through_dialog(app, "autofocus", "autofocus")
-    panel_of(app, autofocus).form.set_value({"linked_imaging": "imaging"})
-    rule = app.commands.add_rule(autofocus)
+    # autofunction is used for its link to an imaging action (an action-selector field)
+    autofunction = add_through_dialog(app, "autofunction", "autofunction")
+    panel_of(app, autofunction).form.set_value({"linked_imaging": "imaging"})
+    rule = app.commands.add_rule(autofunction)
     app.commands.set_rule_dependents(rule, ["imaging"])
     app.window.action_list.select(imaging)
 
     rename_inline(qtbot, item_of(app, imaging), "img")
 
-    assert names(app) == ["img", "autofocus"]
+    assert names(app) == ["img", "autofunction"]
     assert panel_of(app, imaging).header.name_label.text() == "img"
     assert rule.dependent_names == ["img"]
-    assert autofocus.settings.linked_imaging == "img"
-    assert "img" in settings_file(app, autofocus).read_text()
-    assert workflow_state(app)["action_names"] == ["img", "autofocus"]
+    assert autofunction.settings.linked_imaging == "img"
+    assert "img" in settings_file(app, autofunction).read_text()
+    assert workflow_state(app)["action_names"] == ["img", "autofunction"]
     assert not (app.session.workflow_dir / "imaging").exists()
     assert settings_file(app, imaging).is_file()
     assert app.window.log_panel.source_combo.findText("img") >= 0

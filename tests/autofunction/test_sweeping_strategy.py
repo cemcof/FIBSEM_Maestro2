@@ -2,10 +2,10 @@
 # Copyright (c) 2024-2026 CEMCOF
 
 
-from fibsem_maestro.autofocus import InterleavedSweepingStrategy
-from fibsem_maestro.autofocus.result import AutofocusResult
-from fibsem_maestro.autofocus.sweep_space import LinearSweepSpace
-from fibsem_maestro.autofocus.sweep_step import SweepPoint, SweepStep
+from fibsem_maestro.autofunction import InterleavedSweepingStrategy
+from fibsem_maestro.autofunction.result import AutofunctionResult
+from fibsem_maestro.autofunction.sweep_space import LinearSweepSpace
+from fibsem_maestro.autofunction.sweep_step import SweepPoint, SweepStep
 from fibsem_maestro.settings.sweeping_settings import (
     InterleavedStrategy as InterleavedStrategySettings,
 )
@@ -13,9 +13,9 @@ from fibsem_maestro.settings.sweeping_settings import (
 
 def _interleaved_results(
     values: list[SweepPoint], sharpness: dict[float, float]
-) -> list[AutofocusResult]:
+) -> list[AutofunctionResult]:
     return [
-        AutofocusResult(sharpness[v[0]], SweepStep(0, v, i))
+        AutofunctionResult(sharpness[v[0]], SweepStep(0, v, i))
         for i, v in enumerate(values)
     ]
 

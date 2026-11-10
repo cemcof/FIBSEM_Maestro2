@@ -316,12 +316,12 @@ def test_text_logger_follows_an_advance(
 
 
 def test_text_logger_uses_the_configured_name(action_dir: Path) -> None:
-    context = FileActionContext(action_dir, "autofocus", log_level=logging.DEBUG)
+    context = FileActionContext(action_dir, "autofunction", log_level=logging.DEBUG)
 
     context.text_logger.info("x")
     close_all_log_files()
 
-    assert "[autofocus]" in (slice_dir(action_dir, 0) / "run.log").read_text()
+    assert "[autofunction]" in (slice_dir(action_dir, 0) / "run.log").read_text()
 
 
 def test_text_logger_uses_the_configured_filename(action_dir: Path) -> None:

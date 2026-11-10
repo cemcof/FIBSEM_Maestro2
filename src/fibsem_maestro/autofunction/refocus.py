@@ -2,9 +2,9 @@
 # Copyright (c) 2024-2026 CEMCOF
 #
 """
-The refocus action, which keeps the trial frames of step-mode autofocuses in focus.
+The refocus action, which keeps the trial frames of step-mode autofunctions in focus.
 
-During a step-mode autofocus run, each frame of the linked imaging is acquired
+During a step-mode autofunction run, each frame of the linked imaging is acquired
 at a different trial value of the swept attribute, such as the stigmator. Before
 each of these frames, the refocus runs its own short sweep, usually over the
 working distance, under the same conditions as the upcoming frame. It then
@@ -18,9 +18,9 @@ from fibsem_maestro.action.action import Action
 from fibsem_maestro.action.outcome import Produced, StepOutcome
 from fibsem_maestro.action.registry import ACTION_REGISTRY
 from fibsem_maestro.action.state import ActionState
-from fibsem_maestro.autofocus.autofocus import Autofocus
-from fibsem_maestro.autofocus.error import AutofocusError
-from fibsem_maestro.autofocus.sweep_runner import SweepRunner, swept_attributes
+from fibsem_maestro.autofunction.autofunction import Autofunction
+from fibsem_maestro.autofunction.error import AutofunctionError
+from fibsem_maestro.autofunction.sweep_runner import SweepRunner, swept_attributes
 from fibsem_maestro.imaging.imaging import Imaging
 from fibsem_maestro.logging.logging import with_logging_context
 from fibsem_maestro.properties.global_properties import GlobalProperties
@@ -28,7 +28,7 @@ from fibsem_maestro.settings.refocus_settings import RefocusSettings
 
 if TYPE_CHECKING:
     from fibsem_maestro.action_context.action_context import ActionContext
-    from fibsem_maestro.autofocus.sweep_step import SweepPoint
+    from fibsem_maestro.autofunction.sweep_step import SweepPoint
     from fibsem_maestro.core.area import RelativeArea
     from fibsem_maestro.core.beam_type import BeamType
     from fibsem_maestro.microscope.microscope import Microscope
@@ -46,10 +46,10 @@ class Refocus(Action[RefocusSettings, RefocusState]):
     """
     Refocuses the linked imaging's next frame while it is a step-mode trial frame.
 
-    Runs on every slice on which a step-mode autofocus linked to the same
+    Runs on every slice on which a step-mode autofunction linked to the same
     imaging has a run in progress, and once more after the run ends, so that
     the first frame at the run's result is in focus too. It never refocuses an
-    attribute the running autofocus sweeps itself.
+    attribute the running autofunction sweeps itself.
 
     The refocus applies the imaging's upcoming properties (including the
     trial value), runs its own basic or line sweep to completion, and patches
@@ -58,7 +58,7 @@ class Refocus(Action[RefocusSettings, RefocusState]):
     Its only acquisition settings are the mode's scanning area and `delta_x`.
 
     It works on the beam of the linked imaging. In the workflow it must run
-    after the step-mode autofocus and before the imaging (wrapping around the
+    after the step-mode autofunction and before the imaging (wrapping around the
     end of the list), so that it sees the trial value the imaging will use.
     """
 
@@ -134,15 +134,15 @@ class Refocus(Action[RefocusSettings, RefocusState]):
         if id(self) not in position:
             return issues
 
-        for autofocus in self._step_autofocuses():
+        for autofunction in self._step_autofunctions():
             if not _between(
-                position[id(autofocus)],
+                position[id(autofunction)],
                 position[id(self)],
                 position[id(linked)],
                 len(self._actions),
             ):
                 issues.append(
-                    f"Must run after '{autofocus.name}' and before '{name}'; "
+                    f"Must run after '{autofunction.name}' and before '{name}'; "
                     "otherwise it refocuses the previous trial value."
                 )
         return issues
@@ -151,7 +151,7 @@ class Refocus(Action[RefocusSettings, RefocusState]):
         """
         Decide whether the linked imaging's next frame needs refocusing.
 
-        While a step-mode autofocus linked to the same imaging has a run in
+        While a step-mode autofunction linked to the same imaging has a run in
         progress, every next frame is a trial frame, so the refocus runs on
         every slice. After the run ends, it runs once more, for the first frame
         at the run's result.
@@ -159,7 +159,7 @@ class Refocus(Action[RefocusSettings, RefocusState]):
         Returns:
             `True` if the refocus should run for this slice.
         """
-        if (running := self._running_step_autofocus()) is not None:
+        if (running := self._running_step_autofunction()) is not None:
             self._final_refocus_pending = True
             self._ctx.text_logger.info(
                 f"'{self.name}' triggered: '{running.name}' has a step-mode run "
@@ -202,7 +202,7 @@ class Refocus(Action[RefocusSettings, RefocusState]):
         """
         imaging = self._resolve_imaging()
         if not imaging.has_stored_properties():
-            raise AutofocusError(
+            raise AutofunctionError(
                 f"'{imaging.name}' has no stored properties to refocus under; "
                 "prepare it first."
             )
@@ -228,10 +228,10 @@ class Refocus(Action[RefocusSettings, RefocusState]):
             The best value, now on the microscope; None if nothing was swept.
 
         Raises:
-            AutofocusError: If the imaging has no beam.
+            AutofunctionError: If the imaging has no beam.
         """
         if (beam_type := imaging.beam_type) is None:
-            raise AutofocusError(f"'{imaging.name}' does not use a beam.")
+            raise AutofunctionError(f"'{imaging.name}' does not use a beam.")
 
         runner = self._runner_for(beam_type)
         self._microscope.set_properties(imaging.read_properties(), beam=beam_type)
@@ -258,32 +258,32 @@ class Refocus(Action[RefocusSettings, RefocusState]):
             self._runner.rebuild(beam_type)
         return self._runner
 
-    def _running_step_autofocus(self) -> Autofocus | None:
+    def _running_step_autofunction(self) -> Autofunction | None:
         """
-        Return the step-mode autofocus whose trial frames this refocus must refocus.
+        Return the step-mode autofunction whose trial frames this refocus must refocus.
 
         Returns:
-            A step-mode autofocus linked to the same imaging with a run in
+            A step-mode autofunction linked to the same imaging with a run in
             progress that does not sweep any attribute the refocus sweeps;
             None if there is none.
         """
         own = set(swept_attributes(self._settings.mode))
         return next(
             (
-                autofocus
-                for autofocus in self._step_autofocuses()
-                if autofocus.run_in_progress
-                and not own.intersection(autofocus.swept_attributes)
+                autofunction
+                for autofunction in self._step_autofunctions()
+                if autofunction.run_in_progress
+                and not own.intersection(autofunction.swept_attributes)
             ),
             None,
         )
 
-    def _step_autofocuses(self) -> list[Autofocus]:
-        """Return the step-mode autofocuses linked to the same imaging."""
+    def _step_autofunctions(self) -> list[Autofunction]:
+        """Return the step-mode autofunctions linked to the same imaging."""
         return [
             action
             for action in self._actions
-            if isinstance(action, Autofocus)
+            if isinstance(action, Autofunction)
             and action.is_step_mode
             and action.settings.linked_imaging == self._settings.linked_imaging
         ]
@@ -301,11 +301,11 @@ class Refocus(Action[RefocusSettings, RefocusState]):
         Return the linked imaging.
 
         Raises:
-            AutofocusError: If the linked action is not an imaging.
+            AutofunctionError: If the linked action is not an imaging.
         """
         imaging = self._actions.named(self._settings.linked_imaging)
         if not isinstance(imaging, Imaging):
-            raise AutofocusError(
+            raise AutofunctionError(
                 f"Linked action is not an Imaging action: {imaging.name}"
             )
         return imaging

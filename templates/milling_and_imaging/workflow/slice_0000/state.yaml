@@ -10,7 +10,7 @@ action_types:
 - milling
 - post_milling_correction
 - drift_correction
-- autofocus
+- autofunction
 - imaging
 propagations:
 - dependent_names:

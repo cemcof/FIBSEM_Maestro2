@@ -374,7 +374,7 @@ class AreaSelectWidget(QWidget, FieldEditor[list[RelativeArea]]):
         Returns:
             The declared offset, or 0.0 when none is declared or the declared
             one does not resolve: the field it names exists only where an
-            offset applies (e.g. not in imaging or step-mode autofocus).
+            offset applies (e.g. not in imaging or step-mode autofunction).
         """
         if self._offset_provider is None:
             return 0.0

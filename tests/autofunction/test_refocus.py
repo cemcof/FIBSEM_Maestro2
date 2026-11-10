@@ -7,14 +7,14 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from fibsem_maestro.autofocus.autofocus import Autofocus
-from fibsem_maestro.autofocus.refocus import Refocus, RefocusState
-from fibsem_maestro.autofocus.sweeping_strategy import BasicSweepingStrategy
+from fibsem_maestro.autofunction.autofunction import Autofunction
+from fibsem_maestro.autofunction.refocus import Refocus, RefocusState
+from fibsem_maestro.autofunction.sweeping_strategy import BasicSweepingStrategy
 from fibsem_maestro.core.beam_type import BeamType
 from fibsem_maestro.core.frequency import Every
 from fibsem_maestro.imaging.imaging import Imaging
-from fibsem_maestro.settings.autofocus_settings import BasicMode as BasicModeSettings
-from fibsem_maestro.settings.autofocus_settings import StepMode as StepModeSettings
+from fibsem_maestro.settings.autofunction_settings import BasicMode as BasicModeSettings
+from fibsem_maestro.settings.autofunction_settings import StepMode as StepModeSettings
 from fibsem_maestro.settings.property_names import PropertyNames
 from fibsem_maestro.settings.sweeping_settings import CircularSweeping, LinearSweeping
 from fibsem_maestro.workflow.propagations import PropagationRule, Propagations
@@ -25,8 +25,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from fibsem_maestro.action.action import Action
-    from fibsem_maestro.autofocus.evaluation import BasicEvaluation
-    from fibsem_maestro.autofocus.result import AutofocusResult
+    from fibsem_maestro.autofunction.evaluation import BasicEvaluation
+    from fibsem_maestro.autofunction.result import AutofunctionResult
 
 # the refocus sweeps the working distance by up to this much (nm) and picks the top
 REFOCUS_STEP = 100.0
@@ -44,7 +44,7 @@ def best_at_largest_candidate(monkeypatch: pytest.MonkeyPatch) -> None:
     original = BasicSweepingStrategy.evaluate
 
     def largest(
-        self: BasicSweepingStrategy, results: list[AutofocusResult]
+        self: BasicSweepingStrategy, results: list[AutofunctionResult]
     ) -> BasicEvaluation:
         evaluation = original(self, results)
         return dataclasses.replace(evaluation, best=max(evaluation.mean_sharpness))
@@ -70,12 +70,12 @@ def add_imaging(add_action: Callable[..., Action]) -> Callable[..., Imaging]:
 
 
 @pytest.fixture
-def add_stigmator_af(add_action: Callable[..., Action]) -> Callable[..., Autofocus]:
-    """Add a 2D stigmator step-mode autofocus linked to `imaging`."""
+def add_stigmator_af(add_action: Callable[..., Action]) -> Callable[..., Autofunction]:
+    """Add a 2D stigmator step-mode autofunction linked to `imaging`."""
 
-    def add(name: str = "stigmator", index: int | None = None) -> Autofocus:
+    def add(name: str = "stigmator", index: int | None = None) -> Autofunction:
         action = add_action(
-            "autofocus",
+            "autofunction",
             name,
             index=index,
             linked_imaging="imaging",
@@ -86,7 +86,7 @@ def add_stigmator_af(add_action: Callable[..., Action]) -> Callable[..., Autofoc
             # leaves its stale working distance on the microscope before the refocus
             properties_to_collect=PropertyNames(electron_beam=["working_distance"]),
         )
-        assert isinstance(action, Autofocus)
+        assert isinstance(action, Autofunction)
         return action
 
     return add
@@ -122,13 +122,13 @@ def _next_frame_wd(imaging: Imaging) -> float:
 
 
 def _run(
-    workflow: Workflow, slices: int, imaging: Imaging, autofocus: Autofocus
+    workflow: Workflow, slices: int, imaging: Imaging, autofunction: Autofunction
 ) -> tuple[list[bool], list[bool]]:
     """
     Run `slices` more slices.
 
     Returns:
-        Per slice: whether the autofocus had a run in progress afterwards, and
+        Per slice: whether the autofunction had a run in progress afterwards, and
         whether the refocus changed the working distance of the next frame.
     """
     running, refocused = [], []
@@ -136,7 +136,7 @@ def _run(
         before = _next_frame_wd(imaging)
         # before the first slice the counter is still 0
         workflow.run(last_slice=max(workflow.ctx.slice, 1))
-        running.append(autofocus.run_in_progress)
+        running.append(autofunction.run_in_progress)
         refocused.append(
             _next_frame_wd(imaging) == pytest.approx(before + REFOCUS_STEP)
         )
@@ -146,7 +146,7 @@ def _run(
 def test_refocus_runs_during_a_step_run_and_once_after_it(
     workflow: Workflow,
     add_imaging: Callable[..., Imaging],
-    add_stigmator_af: Callable[..., Autofocus],
+    add_stigmator_af: Callable[..., Autofunction],
     add_refocus: Callable[..., Refocus],
 ) -> None:
     imaging = add_imaging()
@@ -163,7 +163,7 @@ def test_refocus_runs_during_a_step_run_and_once_after_it(
 def test_refocus_keeps_the_trial_value_and_its_own_properties(
     workflow: Workflow,
     add_imaging: Callable[..., Imaging],
-    add_stigmator_af: Callable[..., Autofocus],
+    add_stigmator_af: Callable[..., Autofunction],
     add_refocus: Callable[..., Refocus],
 ) -> None:
     imaging = add_imaging()
@@ -189,7 +189,7 @@ def test_refocus_never_refocuses_an_attribute_the_run_sweeps(
 ) -> None:
     add_action("imaging", "imaging")
     add_action(
-        "autofocus",
+        "autofunction",
         "focus",
         linked_imaging="imaging",
         mode=StepModeSettings(
@@ -218,9 +218,9 @@ def test_refocus_never_refocuses_an_attribute_the_run_sweeps(
         (["refocus", "stigmator", "imaging"], False),
     ],
 )
-def test_refocus_must_run_between_the_step_autofocus_and_the_imaging(
+def test_refocus_must_run_between_the_step_autofunction_and_the_imaging(
     add_imaging: Callable[..., Imaging],
-    add_stigmator_af: Callable[..., Autofocus],
+    add_stigmator_af: Callable[..., Autofunction],
     add_refocus: Callable[..., Refocus],
     order: list[str],
     valid: bool,

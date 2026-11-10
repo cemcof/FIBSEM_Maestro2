@@ -11,13 +11,13 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from fibsem_maestro.autofocus.error import AutofocusError
-from fibsem_maestro.autofocus.result import AutofocusResult
-from fibsem_maestro.autofocus.sweep_step import SweepStep
+from fibsem_maestro.autofunction.error import AutofunctionError
+from fibsem_maestro.autofunction.result import AutofunctionResult
+from fibsem_maestro.autofunction.sweep_step import SweepStep
 from fibsem_maestro.core.beam_shift import BeamShift
 from fibsem_maestro.core.image_tools import get_stripes
 from fibsem_maestro.core.registry import Registry
-from fibsem_maestro.settings.autofocus_settings import (
+from fibsem_maestro.settings.autofunction_settings import (
     AutoscriptAutoFocus,
     AutoscriptAutoFocusMethod,
     AutoscriptAutoLensAlignment,
@@ -27,8 +27,8 @@ from fibsem_maestro.settings.autofocus_settings import (
     AutoscriptAutoStigmatorMethod,
     AutoscriptFunctionBase,
 )
-from fibsem_maestro.settings.autofocus_settings import BasicMode as BasicModeSettings
-from fibsem_maestro.settings.autofocus_settings import LineMode as LineModeSettings
+from fibsem_maestro.settings.autofunction_settings import BasicMode as BasicModeSettings
+from fibsem_maestro.settings.autofunction_settings import LineMode as LineModeSettings
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -37,34 +37,34 @@ if TYPE_CHECKING:
         SdbMicroscopeClient,
     )
 
-    from fibsem_maestro.autofocus.autofocus_context import AutofocusContext
-    from fibsem_maestro.autofocus.jobs_manager import JobsManager
+    from fibsem_maestro.autofunction.autofunction_context import AutofunctionContext
+    from fibsem_maestro.autofunction.jobs_manager import JobsManager
     from fibsem_maestro.core.image import Image
     from fibsem_maestro.imaging.imaging import Imaging
 
-# registry of autofocus modes
-AUTOFOCUS_MODES = Registry[type["AutofocusMode"]]("autofocus mode")
+# registry of autofunction modes
+AUTOFUNCTION_MODES = Registry[type["AutofunctionMode"]]("autofunction mode")
 
 
-class AutofocusMode(ABC):
+class AutofunctionMode(ABC):
     """
-    Abstract base class for autofocus mode implementations.
+    Abstract base class for autofunction mode implementations.
 
     Each subclass encodes a specific strategy for sweeping a beam parameter
     and submitting sharpness evaluation jobs. Concrete modes are registered
-    with `AutofocusRegistry` and retrieved by name at runtime.
+    with `AUTOFUNCTION_MODES` and retrieved by name at runtime.
     """
 
     @abstractmethod
     def execute(
         self,
-        ctx: AutofocusContext,
+        ctx: AutofunctionContext,
         jobs: JobsManager,
         imaging: Imaging | None,
         resume_from: int = 0,
     ) -> Generator[SweepStep]:
         """
-        Drive the autofocus sweep and submit sharpness evaluation jobs.
+        Drive the autofunction sweep and submit sharpness evaluation jobs.
 
         Single-shot modes run the whole sweep without yielding. Multi-slice
         modes yield once per slice: each yielded step is a trial whose value
@@ -85,10 +85,10 @@ class AutofocusMode(ABC):
         """
 
 
-@AUTOFOCUS_MODES.register("basic")
-class BasicMode(AutofocusMode):
+@AUTOFUNCTION_MODES.register("basic")
+class BasicMode(AutofunctionMode):
     """
-    Autofocus mode that acquires one image per swept attribute value.
+    Autofunction mode that acquires one image per swept attribute value.
 
     For each value in the sweep range, the target beam attribute is set,
     a full frame is acquired, and its sharpness is evaluated. Once all
@@ -101,7 +101,7 @@ class BasicMode(AutofocusMode):
 
     def execute(
         self,
-        ctx: AutofocusContext,
+        ctx: AutofunctionContext,
         jobs: JobsManager,
         imaging: Imaging | None,
         resume_from: int = 0,
@@ -109,7 +109,9 @@ class BasicMode(AutofocusMode):
         _ = imaging, resume_from
 
         if (sweeping := ctx.sweeping) is None:
-            raise AutofocusError("Sweeping for basic mode autofocus is not defined.")
+            raise AutofunctionError(
+                "Sweeping for basic mode autofunction is not defined."
+            )
 
         mode = ctx.settings.mode
         assert isinstance(mode, BasicModeSettings)
@@ -127,11 +129,11 @@ class BasicMode(AutofocusMode):
         yield from ()
 
 
-@AUTOFOCUS_MODES.register("line")
-class LineMode(AutofocusMode):
+@AUTOFUNCTION_MODES.register("line")
+class LineMode(AutofunctionMode):
     def execute(
         self,
-        ctx: AutofocusContext,
+        ctx: AutofunctionContext,
         jobs: JobsManager,
         imaging: Imaging | None,
         resume_from: int = 0,
@@ -139,7 +141,9 @@ class LineMode(AutofocusMode):
         _ = imaging, resume_from
 
         if (sweeping := ctx.sweeping) is None:
-            raise AutofocusError("Sweeping for line mode autofocus is not defined.")
+            raise AutofunctionError(
+                "Sweeping for line mode autofunction is not defined."
+            )
 
         mode = ctx.settings.mode
         assert isinstance(mode, LineModeSettings)
@@ -159,7 +163,7 @@ class LineMode(AutofocusMode):
 
         yield from ()
 
-    def _estimate_line_time(self, ctx: AutofocusContext) -> float:
+    def _estimate_line_time(self, ctx: AutofunctionContext) -> float:
         """
         Estimate the time required to scan a single line.
 
@@ -197,7 +201,7 @@ class LineMode(AutofocusMode):
 
     def _variable_sweeping_during_scan(
         self,
-        ctx: AutofocusContext,
+        ctx: AutofunctionContext,
         line_time: float,
         sweep_steps: list[SweepStep],
     ) -> None:
@@ -274,7 +278,7 @@ class LineMode(AutofocusMode):
 
     def _process_image(
         self,
-        ctx: AutofocusContext,
+        ctx: AutofunctionContext,
         jobs: JobsManager,
         image: Image,
         sweep_steps: list[SweepStep],
@@ -321,7 +325,7 @@ class LineMode(AutofocusMode):
 
         cycles = len({step.repetition for step in sweep_steps})
         if len(stripes) != cycles:
-            raise AutofocusError(
+            raise AutofunctionError(
                 f"Expected {cycles} stripe(s) in the line-focus frame, found "
                 f"{len(stripes)}. Check the separator threshold, the minimal "
                 "stripe width and whether the sweep fits into the scanned rows."
@@ -358,15 +362,15 @@ class LineMode(AutofocusMode):
                     )
 
 
-@AUTOFOCUS_MODES.register("step")
-class StepMode(AutofocusMode):
+@AUTOFUNCTION_MODES.register("step")
+class StepMode(AutofunctionMode):
     """
-    Autofocus mode that spreads a parameter sweep across consecutive slices.
+    Autofunction mode that spreads a parameter sweep across consecutive slices.
 
     Instead of acquiring its own images, this mode uses the main acquisition
     loop: each slice's production image serves as one trial in the sweep.
     This avoids extra exposure and throughput overhead, at the cost of
-    spreading a single autofocus run over many slices.
+    spreading a single autofunction run over many slices.
 
     On each tick (one per slice) the mode advances the sweep by one step,
     setting the attribute value that the upcoming acquisition will use.
@@ -378,18 +382,20 @@ class StepMode(AutofocusMode):
 
     def execute(
         self,
-        ctx: AutofocusContext,
+        ctx: AutofunctionContext,
         jobs: JobsManager,
         imaging: Imaging | None,
         resume_from: int = 0,
     ) -> Generator[SweepStep]:
         if not imaging:
-            raise AutofocusError(
-                "Linking imaging to autofocus is required for step mode autofocus."
+            raise AutofunctionError(
+                "Linking imaging to autofunction is required for step mode autofunction."
             )
 
         if (sweeping := ctx.sweeping) is None:
-            raise AutofocusError("Sweeping for step mode autofocus is not defined.")
+            raise AutofunctionError(
+                "Sweeping for step mode autofunction is not defined."
+            )
         previous_step: SweepStep | None = None
 
         for sweep in sweeping.sweep():
@@ -413,7 +419,7 @@ class StepMode(AutofocusMode):
 
             previous_step = sweep
 
-            # the upcoming acquisition must use this step's value; Autofocus
+            # the upcoming acquisition must use this step's value; Autofunction
             # hands it to the linked imaging as an explicit patch
             yield sweep
 
@@ -423,14 +429,14 @@ class StepMode(AutofocusMode):
 
     @staticmethod
     def _score_last_frame(
-        ctx: AutofocusContext, jobs: JobsManager, imaging: Imaging, step: SweepStep
+        ctx: AutofunctionContext, jobs: JobsManager, imaging: Imaging, step: SweepStep
     ) -> None:
         """
         Submit the sharpness of the imaging's last frame, acquired at `step`'s value.
 
         With the imaging criterion, the sharpness the imaging calculated for
         that frame is used as is; otherwise the frame is scored with the
-        autofocus's own criterion.
+        autofunction's own criterion.
 
         Args:
             ctx: Shared execution environment.
@@ -440,7 +446,7 @@ class StepMode(AutofocusMode):
         """
         if ctx.uses_imaging_criterion:
             if (sharpness := imaging.wait_for_sharpness()) is None:
-                raise AutofocusError(
+                raise AutofunctionError(
                     f"Sharpness of the last frame of '{imaging.name}' is not "
                     f"available for sweep step {step.index + 1}."
                 )
@@ -448,11 +454,11 @@ class StepMode(AutofocusMode):
             ctx.ctx.text_logger.info(
                 f"Sharpness from {imaging.name} for sweep {step}: {sharpness}"
             )
-            jobs.submit(lambda: AutofocusResult(sharpness, step))
+            jobs.submit(lambda: AutofunctionResult(sharpness, step))
             return
 
         if (image := imaging.last_acquired_image) is None:
-            raise AutofocusError(
+            raise AutofunctionError(
                 f"Last acquired image of '{imaging.name}' is not available for "
                 f"sweep step {step.index + 1}."
             )
@@ -470,10 +476,10 @@ def _given(**kwargs: Any) -> dict[str, Any]:
     return {name: value for name, value in kwargs.items() if value is not None}
 
 
-@AUTOFOCUS_MODES.register("autoscript")
-class AutoscriptMode(AutofocusMode):
+@AUTOFUNCTION_MODES.register("autoscript")
+class AutoscriptMode(AutofunctionMode):
     """
-    Autofocus mode that delegates to the Autoscript manufacturer routines.
+    Autofunction mode that delegates to the Autoscript manufacturer routines.
 
     Executes the appropriate built-in autofunction (autofocus, autostigmator,
     lens alignment, or source tilt correction) based on the configured sweep
@@ -481,13 +487,13 @@ class AutoscriptMode(AutofocusMode):
     for the duration of the operation.
 
     Raises:
-        AutofocusError: If the microscope is not Autoscript-controlled, or
+        AutofunctionError: If the microscope is not Autoscript-controlled, or
             if the sweep attribute is not supported.
     """
 
     def execute(
         self,
-        ctx: AutofocusContext,
+        ctx: AutofunctionContext,
         jobs: JobsManager,
         imaging: Imaging | None,
         resume_from: int = 0,
@@ -499,12 +505,12 @@ class AutoscriptMode(AutofocusMode):
                 AutoscriptMicroscopeControl,
             )
         except ImportError as e:
-            raise AutofocusError(
+            raise AutofunctionError(
                 "Autoscript auto-functions need Autoscript, which is not available."
             ) from e
 
         if not isinstance(ctx.microscope.control, AutoscriptMicroscopeControl):
-            raise AutofocusError(
+            raise AutofunctionError(
                 "Microscope must be an Autoscript-controlled microscope."
             )
 
@@ -518,7 +524,7 @@ class AutoscriptMode(AutofocusMode):
         with ctx.microscope.add_temporary_beam_shift(BeamShift(x=mode.delta_x, y=0.0)):
             match ctx.settings.mode:
                 case AutoscriptAutoFocus() as mode:
-                    self._run_autofocus(ctx, mode, autoscript_microscope)
+                    self._run_autofunction(ctx, mode, autoscript_microscope)
                 case AutoscriptAutoStigmator() as mode:
                     self._run_autostigmator(ctx, mode, autoscript_microscope)
                 case AutoscriptAutoLensAlignment() as mode:
@@ -526,20 +532,20 @@ class AutoscriptMode(AutofocusMode):
                 case AutoscriptAutoSourceTilt() as mode:
                     self._run_auto_source_tilt(ctx, mode, autoscript_microscope)
                 case _:
-                    raise AutofocusError(
+                    raise AutofunctionError(
                         f"Unsupported mode '{ctx.settings.mode}' for AutoscriptMode."
                     )
 
         yield from ()
 
-    def _run_autofocus(
+    def _run_autofunction(
         self,
-        ctx: AutofocusContext,
+        ctx: AutofunctionContext,
         mode: AutoscriptAutoFocus,
         autoscript_microscope: SdbMicroscopeClient,
     ) -> None:
         """
-        Run the manufacturer autofocus routine.
+        Run the manufacturer autofunction routine.
 
         Args:
             ctx: Shared execution environment.
@@ -585,7 +591,7 @@ class AutoscriptMode(AutofocusMode):
 
     def _run_autostigmator(
         self,
-        ctx: AutofocusContext,
+        ctx: AutofunctionContext,
         mode: AutoscriptAutoStigmator,
         autoscript_microscope: SdbMicroscopeClient,
     ) -> None:
@@ -627,7 +633,7 @@ class AutoscriptMode(AutofocusMode):
 
     def _run_auto_lens_alignment(
         self,
-        ctx: AutofocusContext,
+        ctx: AutofunctionContext,
         mode: AutoscriptAutoLensAlignment,
         autoscript_microscope: SdbMicroscopeClient,
     ) -> None:
@@ -672,7 +678,7 @@ class AutoscriptMode(AutofocusMode):
 
     def _run_auto_source_tilt(
         self,
-        ctx: AutofocusContext,
+        ctx: AutofunctionContext,
         mode: AutoscriptAutoSourceTilt,
         autoscript_microscope: SdbMicroscopeClient,
     ) -> None:

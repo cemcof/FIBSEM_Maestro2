@@ -104,7 +104,7 @@ class Imaging(Action[ImagingSettings, ImagingState]):
         if self._ctx.slice == 0:
             return
 
-        # restore the last frame, which a step-mode autofocus may still have to score
+        # restore the last frame, which a step-mode autofunction may still have to score
         self._last_acquired_image = self._read_last_frame()
 
         if (

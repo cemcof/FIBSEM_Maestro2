@@ -6,27 +6,27 @@ from typing import TYPE_CHECKING, Protocol
 
 import numpy as np
 
-from fibsem_maestro.autofocus.error import AutofocusError
-from fibsem_maestro.autofocus.result import AutofocusResult
+from fibsem_maestro.autofunction.error import AutofunctionError
+from fibsem_maestro.autofunction.result import AutofunctionResult
 from fibsem_maestro.criterion.criterion import Criterion
-from fibsem_maestro.settings.autofocus_settings import BasicMode as BasicModeSettings
-from fibsem_maestro.settings.autofocus_settings import (
+from fibsem_maestro.settings.autofunction_settings import BasicMode as BasicModeSettings
+from fibsem_maestro.settings.autofunction_settings import (
     CustomCriterion,
     ImagingCriterion,
 )
-from fibsem_maestro.settings.autofocus_settings import LineMode as LineModeSettings
-from fibsem_maestro.settings.autofocus_settings import StepMode as StepModeSettings
+from fibsem_maestro.settings.autofunction_settings import LineMode as LineModeSettings
+from fibsem_maestro.settings.autofunction_settings import StepMode as StepModeSettings
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from fibsem_maestro.action_context.action_context import ActionContext
-    from fibsem_maestro.autofocus.sweep_step import SweepStep
-    from fibsem_maestro.autofocus.sweeping import Sweeping
+    from fibsem_maestro.autofunction.sweep_step import SweepStep
+    from fibsem_maestro.autofunction.sweeping import Sweeping
     from fibsem_maestro.core.area import RelativeArea
     from fibsem_maestro.core.image import Image
     from fibsem_maestro.microscope.microscope import Microscope
-    from fibsem_maestro.settings.autofocus_settings import AutofocusMode
+    from fibsem_maestro.settings.autofunction_settings import AutofunctionMode
     from fibsem_maestro.settings.criterion_settings import CriterionSettings
 
 
@@ -34,12 +34,12 @@ class SweepSettingsLike(Protocol):
     """
     What sweeping an attribute requires of an action's settings.
 
-    Satisfied structurally by the settings of `Autofocus` and `Refocus`.
+    Satisfied structurally by the settings of `Autofunction` and `Refocus`.
     """
 
     @property
-    def mode(self) -> AutofocusMode:
-        """The autofocus mode and its sweep."""
+    def mode(self) -> AutofunctionMode:
+        """The autofunction mode and its sweep."""
         ...
 
     @property
@@ -48,7 +48,7 @@ class SweepSettingsLike(Protocol):
         ...
 
 
-class AutofocusContext:
+class AutofunctionContext:
     def __init__(
         self,
         microscope: Microscope,
@@ -57,7 +57,7 @@ class AutofocusContext:
         ctx: ActionContext,
     ):
         """
-        Shared execution environment for autofocus mode implementations.
+        Shared execution environment for autofunction mode implementations.
 
         Args:
             microscope: The microscope instance.
@@ -75,7 +75,7 @@ class AutofocusContext:
 
     def make_sharpness_job(
         self, image: Image, sweep: SweepStep
-    ) -> Callable[[], AutofocusResult]:
+    ) -> Callable[[], AutofunctionResult]:
         """
         Create a callable that computes sharpness for a single sweep step.
 
@@ -97,7 +97,7 @@ class AutofocusContext:
             sweep: The sweep step associated with this image.
 
         Returns:
-            A zero-argument callable that returns an `AutofocusResult` when
+            A zero-argument callable that returns an `AutofunctionResult` when
             invoked, or raises an exception if sharpness calculation fails
             or if the criterion is not defined.
         """
@@ -107,17 +107,17 @@ class AutofocusContext:
         text_logger = self.ctx.text_logger.at(current_view.slice_index)
         image_logger = self.ctx.image_logger.at(current_view.slice_index)
 
-        def fn() -> AutofocusResult:
-            def _run() -> AutofocusResult:
+        def fn() -> AutofunctionResult:
+            def _run() -> AutofunctionResult:
                 try:
                     criterion = Criterion(criterion_settings, text_logger, image_logger)
                     value = float(criterion.calculate_sharpness(image))
                     if np.isnan(value):
-                        raise AutofocusError("Sharpness calculation returned NaN")
+                        raise AutofunctionError("Sharpness calculation returned NaN")
                     text_logger.info(
                         f"Sharpness calculation for sweep {sweep}: {value}"
                     )
-                    return AutofocusResult(value, sweep)
+                    return AutofunctionResult(value, sweep)
                 except Exception as exc:
                     text_logger.warning(
                         f"Sharpness calculation for sweep {sweep.value} failed: {exc}."
@@ -146,10 +146,10 @@ class AutofocusContext:
     @property
     def criterion(self) -> CriterionSettings:
         """
-        The criterion the autofocus scores frames with.
+        The criterion the autofunction scores frames with.
 
         Raises:
-            AutofocusError: If the configured mode has no criterion of its own
+            AutofunctionError: If the configured mode has no criterion of its own
                 (Autoscript, or step mode using the imaging's criterion).
         """
         match self.settings.mode:
@@ -158,7 +158,9 @@ class AutofocusContext:
             case StepModeSettings(criterion=CustomCriterion() as custom):
                 return custom.criterion
             case _:
-                raise AutofocusError("The autofocus mode has no criterion of its own.")
+                raise AutofunctionError(
+                    "The autofunction mode has no criterion of its own."
+                )
 
     @property
     def uses_imaging_criterion(self) -> bool:

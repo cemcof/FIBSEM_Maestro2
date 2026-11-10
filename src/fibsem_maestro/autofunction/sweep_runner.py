@@ -2,7 +2,7 @@
 # Copyright (c) 2024-2026 CEMCOF
 
 """
-Runs autofocus sweeps for the actions that sweep beam attributes.
+Runs autofunction sweeps for the actions that sweep beam attributes.
 """
 
 import math
@@ -12,34 +12,34 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from fibsem_maestro.autofocus import AUTOFOCUS_MODES, LineMode
-from fibsem_maestro.autofocus.af_chart import af_chart
-from fibsem_maestro.autofocus.autofocus_context import AutofocusContext
-from fibsem_maestro.autofocus.jobs_manager import JobsManager
-from fibsem_maestro.autofocus.sweep_space import make_sweep_space
-from fibsem_maestro.autofocus.sweeping import Sweeping
+from fibsem_maestro.autofunction import AUTOFUNCTION_MODES, LineMode
+from fibsem_maestro.autofunction.af_chart import af_chart
+from fibsem_maestro.autofunction.autofunction_context import AutofunctionContext
+from fibsem_maestro.autofunction.jobs_manager import JobsManager
+from fibsem_maestro.autofunction.sweep_space import make_sweep_space
+from fibsem_maestro.autofunction.sweeping import Sweeping
 from fibsem_maestro.core.beam_type import BeamType
 from fibsem_maestro.core.point import PixelPoint
 from fibsem_maestro.logging.image.overlay import PolylineOverlay
-from fibsem_maestro.settings.autofocus_settings import AutoscriptFunctionBase
-from fibsem_maestro.settings.autofocus_settings import BasicMode as BasicModeSettings
-from fibsem_maestro.settings.autofocus_settings import LineMode as LineModeSettings
-from fibsem_maestro.settings.autofocus_settings import StepMode as StepModeSettings
+from fibsem_maestro.settings.autofunction_settings import AutoscriptFunctionBase
+from fibsem_maestro.settings.autofunction_settings import BasicMode as BasicModeSettings
+from fibsem_maestro.settings.autofunction_settings import LineMode as LineModeSettings
+from fibsem_maestro.settings.autofunction_settings import StepMode as StepModeSettings
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
     from fibsem_maestro.action_context.action_context import ActionContext
-    from fibsem_maestro.autofocus.autofocus_context import SweepSettingsLike
-    from fibsem_maestro.autofocus.result import AutofocusResult
-    from fibsem_maestro.autofocus.sweep_step import (
+    from fibsem_maestro.autofunction.autofunction_context import SweepSettingsLike
+    from fibsem_maestro.autofunction.result import AutofunctionResult
+    from fibsem_maestro.autofunction.sweep_step import (
         SweepDirection,
         SweepPoint,
         SweepStep,
     )
     from fibsem_maestro.imaging.imaging import Imaging
     from fibsem_maestro.microscope.microscope import Microscope
-    from fibsem_maestro.settings.autofocus_settings import AutofocusMode
+    from fibsem_maestro.settings.autofunction_settings import AutofunctionMode
 
 # another sweep follows only if the best value moved within this angle of the
 # previous move's direction (2D); in 1D the directions are +-1, so it only
@@ -64,7 +64,7 @@ class SweepOutcome:
 
 class SweepRunner:
     """
-    Runs the sweeps of autofocus runs and decides how a run continues.
+    Runs the sweeps of autofunction runs and decides how a run continues.
 
     A run is one or more sweeps: after each, the best value is applied, and
     another sweep around it follows while the best keeps reaching the edge of
@@ -108,12 +108,12 @@ class SweepRunner:
 
     def rebuild(self, beam_type: BeamType) -> None:
         """
-        Rebuild mode, sweeping, and autofocus context from the current settings.
+        Rebuild mode, sweeping, and autofunction context from the current settings.
 
         Args:
             beam_type: The beam whose attributes are swept.
         """
-        self._mode = AUTOFOCUS_MODES.get(self._settings.mode.type)()
+        self._mode = AUTOFUNCTION_MODES.get(self._settings.mode.type)()
 
         if isinstance(self._settings.mode, AutoscriptFunctionBase):
             # sweeping is not used in the Autoscript mode
@@ -127,7 +127,7 @@ class SweepRunner:
                 self._ctx.text_logger.derive("sweeping"),
             )
 
-        self._autofocus_ctx = AutofocusContext(
+        self._autofunction_ctx = AutofunctionContext(
             self._microscope,
             self._sweeping,
             self._settings,
@@ -157,9 +157,9 @@ class SweepRunner:
     @property
     def uses_imaging_criterion(self) -> bool:
         """True if step mode reuses the sharpness its linked imaging calculates."""
-        return self._autofocus_ctx.uses_imaging_criterion
+        return self._autofunction_ctx.uses_imaging_criterion
 
-    def collect_completed(self) -> list[AutofocusResult]:
+    def collect_completed(self) -> list[AutofunctionResult]:
         """
         Return the results of the jobs of the current sweep that have finished.
 
@@ -177,7 +177,7 @@ class SweepRunner:
         sweep_base_value: SweepPoint | None,
         sweeps_done: int,
         last_direction: SweepDirection | None,
-        results: list[AutofocusResult],
+        results: list[AutofunctionResult],
     ) -> None:
         """
         Restore the bookkeeping of an interrupted run.
@@ -222,7 +222,7 @@ class SweepRunner:
             step mode yields one trial step per slice.
         """
         return self._mode.execute(
-            self._autofocus_ctx, self._jobs, imaging, resume_from=resume_from
+            self._autofunction_ctx, self._jobs, imaging, resume_from=resume_from
         )
 
     def finish_sweep(self, line_focus_name: str) -> SweepOutcome:
@@ -313,7 +313,7 @@ class SweepRunner:
         self._jobs = JobsManager(executor=self._executor)
 
     def _edge_direction(
-        self, results: list[AutofocusResult], best: SweepPoint | None
+        self, results: list[AutofunctionResult], best: SweepPoint | None
     ) -> SweepDirection | None:
         """
         Return the direction of the edge of the swept region the best value lies at.
@@ -374,10 +374,10 @@ class SweepRunner:
                 return 1
 
     def _apply_best_and_log(
-        self, results: list[AutofocusResult], line_focus_name: str
+        self, results: list[AutofunctionResult], line_focus_name: str
     ) -> SweepPoint | None:
         """
-        Apply the best sweep value to the microscope and log the autofocus chart.
+        Apply the best sweep value to the microscope and log the autofunction chart.
 
         Does nothing if no sweeping is configured (Autoscript mode).
 
@@ -408,20 +408,20 @@ class SweepRunner:
         return best
 
     def _log_line_focus_image(
-        self, results: list[AutofocusResult], line_focus_name: str
+        self, results: list[AutofunctionResult], line_focus_name: str
     ) -> None:
         """
         Log the line focus image with per-line sharpness overlaid as a polyline.
 
         Args:
-            results: Autofocus results collected during the sweep, one per line.
+            results: Autofunction results collected during the sweep, one per line.
             line_focus_name: Prefix of the image's file name.
         """
         if not results:
             return
 
         # the frame the sweep was evaluated on; the line indices refer to it
-        if (image := self._autofocus_ctx.line_focus_image) is None:
+        if (image := self._autofunction_ctx.line_focus_image) is None:
             self._ctx.text_logger.warning(
                 "Line focus image is not available for logging."
             )
@@ -459,12 +459,12 @@ class SweepRunner:
         )
 
 
-def swept_attributes(mode: AutofocusMode) -> tuple[str, ...]:
+def swept_attributes(mode: AutofunctionMode) -> tuple[str, ...]:
     """
     Return the names of the beam attributes a mode sweeps.
 
     Args:
-        mode: Settings of an autofocus mode.
+        mode: Settings of an autofunction mode.
 
     Returns:
         One name per swept attribute; empty for the Autoscript modes, which do not sweep.
@@ -474,7 +474,7 @@ def swept_attributes(mode: AutofocusMode) -> tuple[str, ...]:
     return make_sweep_space(mode.sweeping).attributes
 
 
-def _get_line_index(result: AutofocusResult) -> int:
+def _get_line_index(result: AutofunctionResult) -> int:
     """Extract global index of the line in the image that this result corresponds to."""
     assert result.sweep.line_index is not None
 

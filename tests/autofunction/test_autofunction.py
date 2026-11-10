@@ -10,22 +10,22 @@ import pytest
 
 from fibsem_maestro.action.registry import ACTION_REGISTRY
 from fibsem_maestro.action_context.file import FileActionContext
-from fibsem_maestro.autofocus import (
+from fibsem_maestro.autofunction import (
     BasicSweepingStrategy,
     InterleavedSweepingStrategy,
 )
-from fibsem_maestro.autofocus.autofocus import Autofocus, AutofocusState
-from fibsem_maestro.autofocus.jobs_manager import JobsManager
-from fibsem_maestro.autofocus.result import AutofocusResult
-from fibsem_maestro.autofocus.sweep_space import LinearSweepSpace
-from fibsem_maestro.autofocus.sweep_step import SweepPoint, SweepStep
+from fibsem_maestro.autofunction.autofunction import Autofunction, AutofunctionState
+from fibsem_maestro.autofunction.jobs_manager import JobsManager
+from fibsem_maestro.autofunction.result import AutofunctionResult
+from fibsem_maestro.autofunction.sweep_space import LinearSweepSpace
+from fibsem_maestro.autofunction.sweep_step import SweepPoint, SweepStep
 from fibsem_maestro.core.frequency import Every
 from fibsem_maestro.logging.text.contextual import ContextualTextLogger
 from fibsem_maestro.microscope.microscope import Microscope
 from fibsem_maestro.properties.beam_properties import BeamProperties
 from fibsem_maestro.properties.global_properties import GlobalProperties
-from fibsem_maestro.settings.autofocus_settings import BasicMode as BasicModeSettings
-from fibsem_maestro.settings.autofocus_settings import StepMode as StepModeSettings
+from fibsem_maestro.settings.autofunction_settings import BasicMode as BasicModeSettings
+from fibsem_maestro.settings.autofunction_settings import StepMode as StepModeSettings
 from fibsem_maestro.settings.microscope_settings import MicroscopeSettings
 from fibsem_maestro.settings.property_names import PropertyNames
 from fibsem_maestro.settings.sweeping_settings import (
@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from fibsem_maestro.action.action import Action
-    from fibsem_maestro.autofocus.evaluation import BasicEvaluation
+    from fibsem_maestro.autofunction.evaluation import BasicEvaluation
 
 SPACE = LinearSweepSpace("working_distance", (-2.0, 2.0), 3)
 BASE: SweepPoint = (0.0,)
@@ -51,9 +51,9 @@ BASE: SweepPoint = (0.0,)
 
 def _interleaved_results(
     values: list[SweepPoint], sharpness: dict[float, float]
-) -> list[AutofocusResult]:
+) -> list[AutofunctionResult]:
     return [
-        AutofocusResult(sharpness[v[0]], SweepStep(0, v, i))
+        AutofunctionResult(sharpness[v[0]], SweepStep(0, v, i))
         for i, v in enumerate(values)
     ]
 
@@ -128,7 +128,9 @@ class LateCallbackExecutor(Executor):
 def test_jobs_manager_returns_every_finished_result() -> None:
     jobs = JobsManager(executor=LateCallbackExecutor())
     for i in range(3):
-        jobs.submit(lambda i=i: AutofocusResult(float(i), SweepStep(0, (float(i),), i)))
+        jobs.submit(
+            lambda i=i: AutofunctionResult(float(i), SweepStep(0, (float(i),), i))
+        )
 
     results = jobs.wait_and_collect()
 
@@ -138,11 +140,11 @@ def test_jobs_manager_returns_every_finished_result() -> None:
 def test_jobs_manager_drops_failed_jobs() -> None:
     jobs = JobsManager()
 
-    def fail() -> AutofocusResult:
+    def fail() -> AutofunctionResult:
         raise RuntimeError("criterion failed")
 
     jobs.submit(fail)
-    jobs.submit(lambda: AutofocusResult(1.0, SweepStep(0, (1.0,), 1)))
+    jobs.submit(lambda: AutofunctionResult(1.0, SweepStep(0, (1.0,), 1)))
     assert [r.sharpness for r in jobs.wait_and_collect()] == [1.0]
 
 
@@ -189,8 +191,8 @@ def add_action(workflow: Workflow, tmp_path: Path) -> Callable[..., Action]:
 
 
 @pytest.fixture
-def add_step_af(add_action: Callable[..., Action]) -> Callable[..., Autofocus]:
-    """Add a step-mode working-distance autofocus linked to `imaging`."""
+def add_step_af(add_action: Callable[..., Action]) -> Callable[..., Autofunction]:
+    """Add a step-mode working-distance autofunction linked to `imaging`."""
 
     def add(
         name: str,
@@ -198,7 +200,7 @@ def add_step_af(add_action: Callable[..., Action]) -> Callable[..., Autofocus]:
         frequency: Every = ONCE,
         max_sweeps: int = 1,
         index: int | None = None,
-    ) -> Autofocus:
+    ) -> Autofunction:
         mode = StepModeSettings(
             sweeping=LinearSweeping(
                 target_attribute="working_distance",
@@ -208,14 +210,14 @@ def add_step_af(add_action: Callable[..., Action]) -> Callable[..., Autofocus]:
             max_sweeps=max_sweeps,
         )
         action = add_action(
-            "autofocus",
+            "autofunction",
             name,
             index=index,
             linked_imaging=imaging,
             mode=mode,
             execution_frequency=frequency,
         )
-        assert isinstance(action, Autofocus)
+        assert isinstance(action, Autofunction)
         return action
 
     return add
@@ -227,8 +229,8 @@ def _run_slice(workflow: Workflow) -> None:
     workflow.run(last_slice=max(workflow.ctx.slice, 1))
 
 
-def _run(workflow: Workflow, slices: int, *afs: Autofocus) -> list[list[bool]]:
-    """Run `slices` more slices; per slice, whether each autofocus has a run in progress."""
+def _run(workflow: Workflow, slices: int, *afs: Autofunction) -> list[list[bool]]:
+    """Run `slices` more slices; per slice, whether each autofunction has a run in progress."""
     history = []
     for _ in range(slices):
         _run_slice(workflow)
@@ -237,14 +239,14 @@ def _run(workflow: Workflow, slices: int, *afs: Autofocus) -> list[list[bool]]:
 
 
 def _running_slices(history: list[list[bool]], which: int) -> list[int]:
-    """Indices of the slices after which autofocus `which` had a run in progress."""
+    """Indices of the slices after which autofunction `which` had a run in progress."""
     return [i for i, row in enumerate(history) if row[which]]
 
 
-def test_step_autofocuses_on_one_imaging_run_one_at_a_time(
+def test_step_autofunctions_on_one_imaging_run_one_at_a_time(
     workflow: Workflow,
     add_action: Callable[..., Action],
-    add_step_af: Callable[..., Autofocus],
+    add_step_af: Callable[..., Autofunction],
 ) -> None:
     add_action("imaging", "imaging")
     first = add_step_af("first")
@@ -263,7 +265,7 @@ def test_step_autofocuses_on_one_imaging_run_one_at_a_time(
 def test_waiting_request_keeps_its_slice_and_ignores_new_triggers(
     workflow: Workflow,
     add_action: Callable[..., Action],
-    add_step_af: Callable[..., Autofocus],
+    add_step_af: Callable[..., Autofunction],
 ) -> None:
     add_action("imaging", "imaging")
     first = add_step_af("first")
@@ -277,16 +279,16 @@ def test_waiting_request_keeps_its_slice_and_ignores_new_triggers(
         assert not second.run_in_progress
 
 
-def test_step_autofocus_waits_for_every_sweep_of_the_run(
+def test_step_autofunction_waits_for_every_sweep_of_the_run(
     workflow: Workflow,
     add_action: Callable[..., Action],
-    add_step_af: Callable[..., Autofocus],
+    add_step_af: Callable[..., Autofunction],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     original = BasicSweepingStrategy.evaluate
 
     def best_at_upper_edge(
-        self: BasicSweepingStrategy, results: list[AutofocusResult]
+        self: BasicSweepingStrategy, results: list[AutofunctionResult]
     ) -> BasicEvaluation:
         evaluation = original(self, results)
         return dataclasses.replace(evaluation, best=max(evaluation.mean_sharpness))
@@ -307,10 +309,10 @@ def test_step_autofocus_waits_for_every_sweep_of_the_run(
     assert second_slices[0] == first_slices[-1] + 1
 
 
-def test_step_autofocuses_on_different_imagings_run_together(
+def test_step_autofunctions_on_different_imagings_run_together(
     workflow: Workflow,
     add_action: Callable[..., Action],
-    add_step_af: Callable[..., Autofocus],
+    add_step_af: Callable[..., Autofunction],
 ) -> None:
     add_action("imaging", "imaging")
     add_action("imaging", "other imaging")
@@ -325,7 +327,7 @@ def test_step_autofocuses_on_different_imagings_run_together(
 def test_waiting_requests_start_in_the_order_they_were_made(
     workflow: Workflow,
     add_action: Callable[..., Action],
-    add_step_af: Callable[..., Autofocus],
+    add_step_af: Callable[..., Autofunction],
 ) -> None:
     add_action("imaging", "imaging")
     running = add_step_af("running")
@@ -342,10 +344,10 @@ def test_waiting_requests_start_in_the_order_they_were_made(
     assert early_slices[-1] < late_slices[0]
 
 
-def test_removing_the_running_autofocus_frees_the_imaging(
+def test_removing_the_running_autofunction_frees_the_imaging(
     workflow: Workflow,
     add_action: Callable[..., Action],
-    add_step_af: Callable[..., Autofocus],
+    add_step_af: Callable[..., Autofunction],
 ) -> None:
     add_action("imaging", "imaging")
     first = add_step_af("first")
@@ -361,10 +363,10 @@ def test_removing_the_running_autofocus_frees_the_imaging(
     assert second.queued_since is None
 
 
-def test_basic_autofocus_is_not_blocked_by_a_step_run(
+def test_basic_autofunction_is_not_blocked_by_a_step_run(
     workflow: Workflow,
     add_action: Callable[..., Action],
-    add_step_af: Callable[..., Autofocus],
+    add_step_af: Callable[..., Autofunction],
 ) -> None:
     add_action("imaging", "imaging")
     step = add_step_af("step")
@@ -372,7 +374,7 @@ def test_basic_autofocus_is_not_blocked_by_a_step_run(
     assert step.run_in_progress
 
     basic = add_action(
-        "autofocus",
+        "autofunction",
         "basic",
         linked_imaging="imaging",
         mode=BasicModeSettings(),
@@ -384,16 +386,16 @@ def test_basic_autofocus_is_not_blocked_by_a_step_run(
 
 def test_waiting_request_survives_saving_the_state(tmp_path: Path) -> None:
     file = tmp_path / "state.yaml"
-    AutofocusState(queued_since=7).to_file(file)
+    AutofunctionState(queued_since=7).to_file(file)
 
-    assert AutofocusState.from_file(file).queued_since == 7
+    assert AutofunctionState.from_file(file).queued_since == 7
 
 
 def test_state_saved_without_a_waiting_request_still_loads(tmp_path: Path) -> None:
     file = tmp_path / "state.yaml"
     file.write_text("sweeps_done: 0\n", encoding="utf-8")
 
-    assert AutofocusState.from_file(file).queued_since is None
+    assert AutofunctionState.from_file(file).queued_since is None
 
 
 def _next_frame_wd(imaging: Action) -> float:
@@ -407,154 +409,154 @@ def _next_frame_wd(imaging: Action) -> float:
 def running(
     workflow: Workflow,
     add_action: Callable[..., Action],
-    add_step_af: Callable[..., Autofocus],
-) -> tuple[Action, Autofocus]:
-    """An imaging and a step-mode autofocus whose run is in progress, after slice 1."""
+    add_step_af: Callable[..., Autofunction],
+) -> tuple[Action, Autofunction]:
+    """An imaging and a step-mode autofunction whose run is in progress, after slice 1."""
     imaging = add_action(
         "imaging",
         "imaging",
         properties_to_collect=PropertyNames(electron_beam=["working_distance"]),
     )
-    autofocus = add_step_af("af")
+    autofunction = add_step_af("af")
     _run_slice(workflow)
-    assert autofocus.run_in_progress
-    return imaging, autofocus
+    assert autofunction.run_in_progress
+    return imaging, autofunction
 
 
-def _stored_state(autofocus: Autofocus) -> AutofocusState:
-    return autofocus.ctx.state_store.read("state.yaml", AutofocusState)
+def _stored_state(autofunction: Autofunction) -> AutofunctionState:
+    return autofunction.ctx.state_store.read("state.yaml", AutofunctionState)
 
 
-def test_new_properties_of_a_step_autofocus_abort_its_run_and_restore_the_imaging(
-    running: tuple[Action, Autofocus],
+def test_new_properties_of_a_step_autofunction_abort_its_run_and_restore_the_imaging(
+    running: tuple[Action, Autofunction],
 ) -> None:
-    imaging, autofocus = running
-    base = autofocus.state.sweep_base_value
+    imaging, autofunction = running
+    base = autofunction.state.sweep_base_value
     assert base is not None
     assert _next_frame_wd(imaging) != pytest.approx(base[0])
 
-    autofocus.replace_properties(autofocus.read_properties())
+    autofunction.replace_properties(autofunction.read_properties())
 
-    assert not autofocus.run_in_progress
-    assert not _stored_state(autofocus).sweep_in_progress
+    assert not autofunction.run_in_progress
+    assert not _stored_state(autofunction).sweep_in_progress
     # the next frame is no longer taken at the trial value
     assert _next_frame_wd(imaging) == pytest.approx(base[0])
 
 
-def test_preparing_a_step_autofocus_aborts_its_run(
-    running: tuple[Action, Autofocus],
+def test_preparing_a_step_autofunction_aborts_its_run(
+    running: tuple[Action, Autofunction],
 ) -> None:
-    _, autofocus = running
+    _, autofunction = running
 
-    autofocus.prepare()
+    autofunction.prepare()
 
-    assert not autofocus.run_in_progress
-    assert not _stored_state(autofocus).sweep_in_progress
+    assert not autofunction.run_in_progress
+    assert not _stored_state(autofunction).sweep_in_progress
 
 
 def test_new_properties_of_the_linked_imaging_abort_the_run_and_are_kept(
-    running: tuple[Action, Autofocus],
+    running: tuple[Action, Autofunction],
 ) -> None:
-    imaging, autofocus = running
+    imaging, autofunction = running
     edited = GlobalProperties(electron_beam=BeamProperties(working_distance=4.2e6))
 
     imaging.replace_properties(edited)
 
-    assert not autofocus.run_in_progress
+    assert not autofunction.run_in_progress
     assert imaging.read_properties() == edited
 
 
 def test_preparing_the_linked_imaging_aborts_the_run(
-    running: tuple[Action, Autofocus],
+    running: tuple[Action, Autofunction],
 ) -> None:
-    imaging, autofocus = running
+    imaging, autofunction = running
 
     imaging.prepare()
 
-    assert not autofocus.run_in_progress
+    assert not autofunction.run_in_progress
 
 
 def test_new_properties_of_other_actions_keep_the_run(
-    running: tuple[Action, Autofocus],
+    running: tuple[Action, Autofunction],
     add_action: Callable[..., Action],
 ) -> None:
-    _, autofocus = running
+    _, autofunction = running
     other = add_action("imaging", "other")
 
     other.replace_properties(other.read_properties())
     other.prepare()
 
-    assert autofocus.run_in_progress
+    assert autofunction.run_in_progress
 
 
 def test_aborted_run_keeps_a_waiting_request(
     workflow: Workflow,
-    running: tuple[Action, Autofocus],
-    add_step_af: Callable[..., Autofocus],
+    running: tuple[Action, Autofunction],
+    add_step_af: Callable[..., Autofunction],
 ) -> None:
-    _, autofocus = running
+    _, autofunction = running
     waiting = add_step_af("waiting", frequency=Every(n=1))
     _run_slice(workflow)
     assert waiting.queued_since == 2
 
-    autofocus.replace_properties(autofocus.read_properties())
+    autofunction.replace_properties(autofunction.read_properties())
 
-    assert not autofocus.run_in_progress
+    assert not autofunction.run_in_progress
     assert waiting.queued_since == 2
 
 
 def test_settings_change_discarding_the_run_restores_the_imaging(
-    running: tuple[Action, Autofocus],
+    running: tuple[Action, Autofunction],
 ) -> None:
-    imaging, autofocus = running
-    base = autofocus.state.sweep_base_value
+    imaging, autofunction = running
+    base = autofunction.state.sweep_base_value
     assert base is not None
 
-    autofocus.settings.linked_imaging = "elsewhere"
+    autofunction.settings.linked_imaging = "elsewhere"
 
-    assert not autofocus.run_in_progress
+    assert not autofunction.run_in_progress
     # restored on the imaging the run patched, not the newly linked one
     assert _next_frame_wd(imaging) == pytest.approx(base[0])
 
 
-def test_resetting_the_state_of_a_step_autofocus_restores_the_imaging(
-    running: tuple[Action, Autofocus],
+def test_resetting_the_state_of_a_step_autofunction_restores_the_imaging(
+    running: tuple[Action, Autofunction],
 ) -> None:
-    imaging, autofocus = running
-    base = autofocus.state.sweep_base_value
+    imaging, autofunction = running
+    base = autofunction.state.sweep_base_value
     assert base is not None
 
     # e.g. the Reset state button
-    autofocus.reset_state()
+    autofunction.reset_state()
 
-    assert not autofocus.run_in_progress
+    assert not autofunction.run_in_progress
     assert _next_frame_wd(imaging) == pytest.approx(base[0])
 
 
 def test_workflow_reset_leaves_the_imaging_props_alone(
-    running: tuple[Action, Autofocus],
+    running: tuple[Action, Autofunction],
 ) -> None:
-    imaging, autofocus = running
+    imaging, autofunction = running
     before = imaging.read_properties()
 
-    autofocus.reset()
+    autofunction.reset()
 
-    assert not autofocus.run_in_progress
+    assert not autofunction.run_in_progress
     assert imaging.read_properties() == before
 
 
-def test_step_autofocus_tells_whose_new_properties_would_abort_its_run(
-    running: tuple[Action, Autofocus],
+def test_step_autofunction_tells_whose_new_properties_would_abort_its_run(
+    running: tuple[Action, Autofunction],
     add_action: Callable[..., Action],
 ) -> None:
-    imaging, autofocus = running
+    imaging, autofunction = running
     other = add_action("imaging", "other")
 
-    assert autofocus.properties_would_discard_state(autofocus)
-    assert autofocus.properties_would_discard_state(imaging)
-    assert not autofocus.properties_would_discard_state(other)
+    assert autofunction.properties_would_discard_state(autofunction)
+    assert autofunction.properties_would_discard_state(imaging)
+    assert not autofunction.properties_would_discard_state(other)
 
-    autofocus.replace_properties(autofocus.read_properties())
+    autofunction.replace_properties(autofunction.read_properties())
 
     # nothing left to discard
-    assert not autofocus.properties_would_discard_state(imaging)
+    assert not autofunction.properties_would_discard_state(imaging)

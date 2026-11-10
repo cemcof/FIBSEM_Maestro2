@@ -21,7 +21,7 @@ class Registry[T]:
 
     Args:
         name: Human-readable name for the kind of object stored,
-            used in error messages (e.g. "autofocus mode", "criterion").
+            used in error messages (e.g. "autofunction mode", "criterion").
     """
 
     def __init__(self, name: str) -> None:

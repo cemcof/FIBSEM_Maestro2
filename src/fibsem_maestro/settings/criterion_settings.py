@@ -138,7 +138,7 @@ class CriterionSettings(BaseSettings):
                 BeamSource("beam_type", via="linked_imaging"),
             ),
             offset=AcquisitionOffset(source="mode.delta_x"),
-            # imaging and the basic and line autofocus modes scan their own
+            # imaging and the basic and line autofunction modes scan their own
             # area; step mode scores the frames of its linked imaging
             crop_sources=(
                 CropSource("scanning_area"),

@@ -69,7 +69,7 @@ def settings() -> SampleSettings:
         beam_type=BeamType.ION,
         sharpness_limit=0.8,
         output_dir=Path("/data/run7"),
-        labels=["autofocus", "slice"],
+        labels=["autofunction", "slice"],
     )
 
 
@@ -200,7 +200,7 @@ def test_round_trip_preserves_a_list_field(
 
     assert cast(
         "SampleSettings", store.read("settings.yaml", SampleSettings)
-    ).labels == ["autofocus", "slice"]
+    ).labels == ["autofunction", "slice"]
 
 
 def test_round_trip_preserves_an_unset_optional_field(

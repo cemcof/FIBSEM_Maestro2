@@ -22,7 +22,7 @@ class Produced:
         patches: Explicit property patches for named actions, applied to their
             props files after rule-based propagation, so they take precedence.
             Used where one action must set another's input directly, e.g.
-            step-mode autofocus handing trial values to its linked imaging.
+            step-mode autofunction handing trial values to its linked imaging.
     """
 
     props: GlobalProperties

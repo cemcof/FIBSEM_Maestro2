@@ -124,12 +124,12 @@ def test_file_created_in_the_slice_directory(logger, cursor):
 
 
 def test_custom_filename_is_used(cursor):
-    logger = FileTextLogger(cursor, "run", filename="autofocus.log")
+    logger = FileTextLogger(cursor, "run", filename="autofunction.log")
 
     logger.info("x")
     logger.close()
 
-    assert cursor.log_path(0, "autofocus.log").exists()
+    assert cursor.log_path(0, "autofunction.log").exists()
     assert not cursor.log_path(0).exists()
 
 

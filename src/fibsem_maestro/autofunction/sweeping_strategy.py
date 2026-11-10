@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from fibsem_maestro.autofocus.error import AutofocusError
-from fibsem_maestro.autofocus.evaluation import (
+from fibsem_maestro.autofunction.error import AutofunctionError
+from fibsem_maestro.autofunction.evaluation import (
     BaseMeasurement,
     BasicEvaluation,
     CandidateComparison,
@@ -20,10 +20,10 @@ from fibsem_maestro.autofocus.evaluation import (
 from fibsem_maestro.core.registry import Registry
 
 if TYPE_CHECKING:
-    from fibsem_maestro.autofocus.evaluation import SweepEvaluation
-    from fibsem_maestro.autofocus.result import AutofocusResult
-    from fibsem_maestro.autofocus.sweep_space import SweepSpace
-    from fibsem_maestro.autofocus.sweep_step import SweepPoint
+    from fibsem_maestro.autofunction.evaluation import SweepEvaluation
+    from fibsem_maestro.autofunction.result import AutofunctionResult
+    from fibsem_maestro.autofunction.sweep_space import SweepSpace
+    from fibsem_maestro.autofunction.sweep_step import SweepPoint
     from fibsem_maestro.settings.sweeping_settings import (
         BasicStrategy as BasicStrategySettings,
     )
@@ -40,7 +40,7 @@ SWEEPING_STRATEGIES = Registry[type["SweepingStrategy"]]("sweeping strategy")
 
 class SweepingStrategy(ABC):
     """
-    Abstract base class for autofocus sweeping strategies.
+    Abstract base class for autofunction sweeping strategies.
 
     A strategy decides the order in which the candidates of a sweep space are
     measured (and whether the base is measured too), and how the best value is
@@ -74,7 +74,7 @@ class SweepingStrategy(ABC):
         """
 
     @abstractmethod
-    def evaluate(self, results: list[AutofocusResult]) -> SweepEvaluation:
+    def evaluate(self, results: list[AutofunctionResult]) -> SweepEvaluation:
         """
         Choose the best value from the results of a sweep.
 
@@ -86,7 +86,7 @@ class SweepingStrategy(ABC):
             The chosen value together with the numbers it was chosen from.
 
         Raises:
-            AutofocusError: If no results are provided.
+            AutofunctionError: If no results are provided.
         """
 
 
@@ -108,7 +108,7 @@ class BasicSweepingStrategy(SweepingStrategy):
         """
         return space.candidates(base, reverse=repetition % 2 == 1)
 
-    def evaluate(self, results: list[AutofocusResult]) -> BasicEvaluation:
+    def evaluate(self, results: list[AutofunctionResult]) -> BasicEvaluation:
         """
         Select the value with the highest mean sharpness over all its results.
 
@@ -117,7 +117,7 @@ class BasicSweepingStrategy(SweepingStrategy):
         odd number of steps over a symmetric range.
         """
         if not results:
-            raise AutofocusError("No autofocus results provided")
+            raise AutofunctionError("No autofunction results provided")
 
         by_value: dict[SweepPoint, list[float]] = defaultdict(list)
         by_cycle: dict[int, dict[SweepPoint, list[float]]] = defaultdict(
@@ -172,7 +172,7 @@ class InterleavedSweepingStrategy(SweepingStrategy):
             values += [base, candidate]
         return values
 
-    def evaluate(self, results: list[AutofocusResult]) -> InterleavedEvaluation:
+    def evaluate(self, results: list[AutofunctionResult]) -> InterleavedEvaluation:
         """
         Select the candidate that is clearly sharper than the base around it.
 
@@ -191,10 +191,10 @@ class InterleavedSweepingStrategy(SweepingStrategy):
             if no candidate is clearly sharper, with every comparison made.
         """
         if not results:
-            raise AutofocusError("No autofocus results provided")
+            raise AutofunctionError("No autofunction results provided")
 
         # mean sharpness per sweep step
-        by_step: dict[int, list[AutofocusResult]] = defaultdict(list)
+        by_step: dict[int, list[AutofunctionResult]] = defaultdict(list)
         for r in results:
             by_step[r.sweep.index].append(r)
         steps = sorted(by_step)

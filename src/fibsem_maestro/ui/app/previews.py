@@ -80,7 +80,7 @@ def acquire_preview(microscope: Microscope, request: PreviewRequest) -> Image:
     #
     # The assumption can still be wrong: anything else that acquired
     # with a shifted beam since (another area selector with an offset,
-    # a basic or line autofocus sweep or test) leaves its frame as the
+    # a basic or line autofunction sweep or test) leaves its frame as the
     # last one, and a Load here then shows that frame instead of the
     # current view. Only grabbing a fresh frame on every Load avoids
     # this, at the cost of an extra frame (and ion dose) each time.

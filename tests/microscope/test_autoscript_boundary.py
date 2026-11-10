@@ -7,7 +7,7 @@ pytest.importorskip("autoscript_sdb_microscope_client")
 
 from autoscript_sdb_microscope_client.sdb_microscope_client import SdbMicroscopeClient
 
-from fibsem_maestro.autofocus.sweeping import Sweeping
+from fibsem_maestro.autofunction.sweeping import Sweeping
 from fibsem_maestro.core.beam_type import BeamType
 from fibsem_maestro.core.detector_mode import DetectorMode
 from fibsem_maestro.core.resolution import Resolution

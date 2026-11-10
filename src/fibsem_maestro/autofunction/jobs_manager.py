@@ -9,12 +9,12 @@ from typing import TYPE_CHECKING, Self
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from fibsem_maestro.autofocus.result import AutofocusResult
+    from fibsem_maestro.autofunction.result import AutofunctionResult
 
 
 class JobsManager:
     """
-    Manages concurrent resolution calculation jobs during an autofocus sweep.
+    Manages concurrent resolution calculation jobs during an autofunction sweep.
 
     Submits resolution calculations to a thread pool as images are acquired
     and collects their results. Results are read from the futures themselves,
@@ -35,10 +35,10 @@ class JobsManager:
         self._executor: Executor = executor or ThreadPoolExecutor()
 
         self._lock = threading.Lock()
-        self._pending: list[Future[AutofocusResult]] = []
-        self._results: list[AutofocusResult] = []
+        self._pending: list[Future[AutofunctionResult]] = []
+        self._results: list[AutofunctionResult] = []
 
-    def submit(self, fn: Callable[[], AutofocusResult]) -> None:
+    def submit(self, fn: Callable[[], AutofunctionResult]) -> None:
         """
         Submit a callable for asynchronous resolution calculation.
 
@@ -46,30 +46,30 @@ class JobsManager:
         failed job contributes no result.
 
         Args:
-            fn: A zero-argument callable returning an AutofocusResult.
+            fn: A zero-argument callable returning an AutofunctionResult.
         """
         future = self._executor.submit(fn)
         with self._lock:
             self._pending.append(future)
 
-    def wait_and_collect(self) -> list[AutofocusResult]:
+    def wait_and_collect(self) -> list[AutofunctionResult]:
         """
         Block until all submitted jobs finish and return the results.
 
         Returns:
-            All successfully computed AutofocusResult instances. Failed jobs
+            All successfully computed AutofunctionResult instances. Failed jobs
             are excluded.
         """
         self._collect(wait=True)
         with self._lock:
             return list(self._results)
 
-    def collect_completed(self) -> list[AutofocusResult]:
+    def collect_completed(self) -> list[AutofunctionResult]:
         """
         Return results of already-finished jobs without waiting or clearing.
 
         Returns:
-            All AutofocusResult instances computed so far.
+            All AutofunctionResult instances computed so far.
         """
         self._collect(wait=False)
         with self._lock:

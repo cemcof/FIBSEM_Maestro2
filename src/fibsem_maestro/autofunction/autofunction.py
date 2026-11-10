@@ -9,29 +9,29 @@ from fibsem_maestro.action.action import Action
 from fibsem_maestro.action.outcome import Produced, StepOutcome
 from fibsem_maestro.action.registry import ACTION_REGISTRY
 from fibsem_maestro.action.state import ActionState
-from fibsem_maestro.autofocus.error import AutofocusError
-from fibsem_maestro.autofocus.result import AutofocusResult
-from fibsem_maestro.autofocus.sweep_runner import SweepRunner
-from fibsem_maestro.autofocus.sweep_step import (
+from fibsem_maestro.autofunction.error import AutofunctionError
+from fibsem_maestro.autofunction.result import AutofunctionResult
+from fibsem_maestro.autofunction.sweep_runner import SweepRunner
+from fibsem_maestro.autofunction.sweep_step import (
     SweepDirection,
     SweepPoint,
 )
 from fibsem_maestro.imaging.imaging import Imaging
 from fibsem_maestro.logging.logging import with_logging_context
 from fibsem_maestro.properties.global_properties import GlobalProperties
-from fibsem_maestro.settings.autofocus_settings import (
-    AutofocusSettings,
+from fibsem_maestro.settings.autofunction_settings import (
+    AutofunctionSettings,
     AutoscriptFunctionBase,
 )
-from fibsem_maestro.settings.autofocus_settings import BasicMode as BasicModeSettings
-from fibsem_maestro.settings.autofocus_settings import LineMode as LineModeSettings
-from fibsem_maestro.settings.autofocus_settings import StepMode as StepModeSettings
+from fibsem_maestro.settings.autofunction_settings import BasicMode as BasicModeSettings
+from fibsem_maestro.settings.autofunction_settings import LineMode as LineModeSettings
+from fibsem_maestro.settings.autofunction_settings import StepMode as StepModeSettings
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
     from fibsem_maestro.action_context.action_context import ActionContext
-    from fibsem_maestro.autofocus.sweep_step import (
+    from fibsem_maestro.autofunction.sweep_step import (
         SweepStep,
     )
     from fibsem_maestro.core.area import RelativeArea
@@ -41,11 +41,11 @@ if TYPE_CHECKING:
     from fibsem_maestro.workflow.actions import Actions
 
 
-class AutofocusState(ActionState):
+class AutofunctionState(ActionState):
     sweep_base_value: SweepPoint | None = None
     sweep_in_progress: bool = False
     current_step_index: int = 0
-    collected_results: list[AutofocusResult] = field(default_factory=list)
+    collected_results: list[AutofunctionResult] = field(default_factory=list)
     sweeps_done: int = 0
     last_direction: SweepDirection | None = None
     # slice on which a step-mode run was requested that is still waiting for
@@ -84,20 +84,23 @@ class _TrialTarget:
     attributes: tuple[str, ...]
 
 
-@ACTION_REGISTRY.register("autofocus")
-class Autofocus(Action[AutofocusSettings, AutofocusState]):
+@ACTION_REGISTRY.register("autofunction")
+class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
     """
-    Orchestrates the autofocus pipeline for a single configured mode.
+    Optimises beam attributes by sweeping them and scoring the frames' sharpness.
 
-    Manages the full autofocus lifecycle: deciding when to execute based on
+    An autofunction is the generic form of autofocus (working distance),
+    autostigmation (stigmator) and their relatives: whatever the mode sweeps
+    (`swept_attributes`), or the Autoscript routine it delegates to.
+
+    Manages the full autofunction lifecycle: deciding when to execute based on
     slice number and image sharpness, setting up the appropriate mode, advancing
     the execution generator, collecting sharpness results, and writing the best sweep value
     back to the microscope and property store.
 
-    For single-shot modes (basic, line, Autoscript) the sweep completes in a
-    single `perform_autofocus` call. For step mode, execution is resumed
-    across successive calls, one sweep step per slice, until the sweep is
-    exhausted.
+    For single-shot modes (basic, line, Autoscript) the sweep completes within
+    one execution. For step mode, execution is resumed across successive
+    slices, one sweep step per slice, until the sweep is exhausted.
     """
 
     _STATE_FIELDS = frozenset({"mode", "beam_type", "linked_imaging"})
@@ -106,7 +109,7 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
         self,
         name: str,
         microscope: Microscope,
-        settings: AutofocusSettings,
+        settings: AutofunctionSettings,
         ctx: ActionContext,
         actions: Actions,
     ):
@@ -141,16 +144,16 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
             self._runner.rebuild(self._settings.beam_type)
 
     @classmethod
-    def settings_cls(cls) -> type[AutofocusSettings]:
-        return AutofocusSettings
+    def settings_cls(cls) -> type[AutofunctionSettings]:
+        return AutofunctionSettings
 
     @classmethod
-    def state_cls(cls) -> type[AutofocusState]:
-        return AutofocusState
+    def state_cls(cls) -> type[AutofunctionState]:
+        return AutofunctionState
 
     @property
-    def state(self) -> AutofocusState:
-        return AutofocusState(
+    def state(self) -> AutofunctionState:
+        return AutofunctionState(
             sweep_base_value=self._runner.sweep_base_value,
             sweep_in_progress=self._active_gen is not None,
             current_step_index=self._current_step_index,
@@ -165,7 +168,7 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
     @property
     def run_in_progress(self) -> bool:
         """
-        True while an autofocus run is in progress.
+        True while an autofunction run is in progress.
 
         A run lasts from its first sweep to the end of its last sweep, including
         the sweeps that follow because the best value reached the edge. Between
@@ -175,7 +178,7 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
 
     @property
     def is_step_mode(self) -> bool:
-        """True if the autofocus is configured for step mode."""
+        """True if the autofunction is configured for step mode."""
         return isinstance(self._settings.mode, StepModeSettings)
 
     @property
@@ -185,7 +188,7 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
 
     @property
     def swept_attributes(self) -> tuple[str, ...]:
-        """Names of the beam attributes the autofocus sweeps; empty for Autoscript."""
+        """Names of the beam attributes the autofunction sweeps; empty for Autoscript."""
         return self._runner.attributes
 
     @property
@@ -203,7 +206,7 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
             case _:
                 return None
 
-    def set_state(self, state: AutofocusState) -> None:
+    def set_state(self, state: AutofunctionState) -> None:
         # close a running sweep explicitly
         if self._active_gen is not None:
             self._abort_sweep()
@@ -234,20 +237,20 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
 
     def should_execute(self) -> bool:
         """
-        Decide whether autofocus runs on the current slice.
+        Decide whether autofunction runs on the current slice.
 
-        A run in progress always continues. Otherwise autofocus is triggered if
+        A run in progress always continues. Otherwise autofunction is triggered if
         the slice matches the execution frequency, or if the sharpness of the
         linked imaging's latest frame is below `settings.sharpness_limit`.
 
-        A triggered step-mode autofocus may have to wait: per linked imaging,
+        A triggered step-mode autofunction may have to wait: per linked imaging,
         only one step-mode run may be in progress, since each one varies that
         imaging's frames. The request then waits in first-come order and the
         run starts as soon as the imaging is free; triggers that arrive while
         it waits are ignored.
 
         Returns:
-            `True` if autofocus should run for this slice.
+            `True` if autofunction should run for this slice.
         """
         if self._active_gen is not None:
             return True
@@ -263,21 +266,21 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
                 return False
             self._queued_since = self._ctx.slice
 
-        if (blocker := _blocking_step_autofocus(self, self._actions)) is not None:
+        if (blocker := _blocking_step_autofunction(self, self._actions)) is not None:
             self._log_waiting(blocker)
             return False
 
         if self._queued_since < self._ctx.slice:
             self._ctx.text_logger.info(
                 f"'{self.name}' starts the step-mode run requested on slice "
-                f"{self._queued_since}; autofocus queue of '{self._settings.linked_imaging}' is free."
+                f"{self._queued_since}; autofunction queue of '{self._settings.linked_imaging}' is free."
             )
         self._queued_since = None
         return True
 
     def _is_triggered(self) -> bool:
         """
-        Check the triggers of a new autofocus run.
+        Check the triggers of a new autofunction run.
 
         Blocks until the sharpness of the linked imaging's latest frame is
         available, if a sharpness limit is set.
@@ -307,7 +310,7 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
 
         return False
 
-    def _log_waiting(self, blocker: Autofocus) -> None:
+    def _log_waiting(self, blocker: Autofunction) -> None:
         """
         Log that the waiting step-mode run cannot start yet.
 
@@ -315,7 +318,7 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
         on the slices it keeps waiting.
 
         Args:
-            blocker: The autofocus the run waits for.
+            blocker: The autofunction the run waits for.
         """
         reason = (
             "has a step-mode run in progress"
@@ -334,17 +337,17 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
     @with_logging_context
     def test(self) -> None:
         """
-        Run the autofocus pipeline once and apply the best sweep value.
+        Run the autofunction pipeline once and apply the best sweep value.
 
         Intended for manual testing and diagnostics outside the normal
         acquisition loop.
 
         Raises:
-            AutofocusError: If the configured mode is a step mode, which spreads
+            AutofunctionError: If the configured mode is a step mode, which spreads
                 execution across multiple slices and cannot be run in a single call.
         """
         if self.is_step_mode:
-            raise AutofocusError("Test is not supported for step mode")
+            raise AutofunctionError("Test is not supported for step mode")
 
         with self._scanning_area_applied():
             if self._ctx.props_store.exists("props.yaml"):
@@ -381,7 +384,7 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
         Start a new sweep from the currently applied properties.
 
         Raises:
-            AutofocusError: If step mode is configured with an unsuitable linked imaging.
+            AutofunctionError: If step mode is configured with an unsuitable linked imaging.
         """
         imaging = self._resolve_imaging()
         if self.is_step_mode:
@@ -401,30 +404,30 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
             imaging: The linked imaging action.
 
         Raises:
-            AutofocusError: If the imaging does not run every slice, or uses a
-                different beam than the autofocus.
+            AutofunctionError: If the imaging does not run every slice, or uses a
+                different beam than the autofunction.
         """
         if not imaging.settings.execution_frequency.runs_every_slice:
-            raise AutofocusError(
+            raise AutofunctionError(
                 f"Step mode requires '{imaging.name}' to run every slice "
                 f"(execution frequency 1), got {imaging.settings.execution_frequency}."
             )
 
         if imaging.beam_type is not self.beam_type:
-            raise AutofocusError(
+            raise AutofunctionError(
                 f"Step mode requires '{imaging.name}' to use the same beam as "
                 f"'{self.name}' ({self.beam_type}), got {imaging.beam_type}."
             )
 
         if self._runner.uses_imaging_criterion and imaging.settings.criterion is None:
-            raise AutofocusError(
+            raise AutofunctionError(
                 f"Step mode uses the criterion of '{imaging.name}', but it has none configured."
             )
 
     def _resolve_imaging(self) -> Imaging:
         imaging = self._actions.named(self._settings.linked_imaging)
         if not isinstance(imaging, Imaging):
-            raise AutofocusError(
+            raise AutofunctionError(
                 f"Linked action is not an Imaging action: {imaging.name}"
             )
         return imaging
@@ -439,7 +442,7 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
 
         Returns:
             The trial step the next acquisition must use, or `None` if the
-            autofocus run finished and its best value was applied.
+            autofunction run finished and its best value was applied.
         """
         assert self._active_gen is not None
         self._current_step_index += 1
@@ -477,7 +480,7 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
 
         self._runner.end_run()
         if self._settings.grab_frame_after:
-            self._save_result_frame("after_autofocus")
+            self._save_result_frame("after_autofunction")
 
         return None
 
@@ -508,7 +511,7 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
 
         Returns:
             True while a step-mode run is in progress and `of` is this
-            autofocus or the imaging the run puts its trial values into.
+            autofunction or the imaging the run puts its trial values into.
         """
         if self._active_gen is None:
             return False
@@ -520,7 +523,7 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
         Abort a step-mode run when its own properties or its imaging's are replaced.
 
         The run started from the old properties, and its results were scored
-        on frames taken with them. If the autofocus's own properties were
+        on frames taken with them. If the autofunction's own properties were
         replaced, the imaging gets back the value the sweep started from in
         place of the trial value; new properties of the imaging are kept. A
         waiting run request is kept: the run will start from the new
@@ -582,23 +585,23 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
         self._runner.abort_sweep()
 
 
-def _blocking_step_autofocus(
-    candidate: Autofocus, actions: Actions
-) -> Autofocus | None:
+def _blocking_step_autofunction(
+    candidate: Autofunction, actions: Actions
+) -> Autofunction | None:
     """
-    Return the step-mode autofocus that `candidate` has to wait for, if any.
+    Return the step-mode autofunction that `candidate` has to wait for, if any.
 
-    Step-mode autofocuses linked to the same imaging run one at a time. A run in
+    Step-mode autofunctions linked to the same imaging run one at a time. A run in
     progress blocks the others until it ends, including the sweeps that follow
     it. Waiting requests start in the order of the slice they were made on;
-    ties go to the autofocus earlier in the workflow.
+    ties go to the autofunction earlier in the workflow.
 
     Args:
-        candidate: A step-mode autofocus with a waiting request.
+        candidate: A step-mode autofunction with a waiting request.
         actions: Every action of the workflow, in workflow order.
 
     Returns:
-        The autofocus with a run in progress on the same imaging, else the
+        The autofunction with a run in progress on the same imaging, else the
         first one waiting ahead of `candidate`; None if `candidate` may start.
     """
     assert candidate.queued_since is not None
@@ -608,7 +611,7 @@ def _blocking_step_autofocus(
     rivals = [
         action
         for action in actions
-        if isinstance(action, Autofocus)
+        if isinstance(action, Autofunction)
         and action is not candidate
         and action.settings.linked_imaging == imaging
     ]

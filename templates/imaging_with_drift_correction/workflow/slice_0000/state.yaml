@@ -4,7 +4,7 @@ action_names:
   - imaging
 action_types:
   - drift_correction
-  - autofocus
+  - autofunction
   - imaging
 propagations:
   - dependent_names:

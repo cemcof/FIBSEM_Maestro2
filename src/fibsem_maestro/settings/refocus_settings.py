@@ -8,7 +8,7 @@ from pydantic import Field
 
 from fibsem_maestro.core.frequency import Every
 from fibsem_maestro.imaging.imaging import Imaging
-from fibsem_maestro.settings.autofocus_settings import BasicMode, LineMode
+from fibsem_maestro.settings.autofunction_settings import BasicMode, LineMode
 from fibsem_maestro.settings.base_settings import BaseSettings
 from fibsem_maestro.settings.form_utils import FormHint, WidgetType
 from fibsem_maestro.settings.property_names import PropertyNames
@@ -22,9 +22,9 @@ RefocusMode = Annotated[BasicMode | LineMode, Field(discriminator="type")]
 
 class RefocusSettings(BaseSettings):
     """
-    Settings of a refocus, which keeps the trial frames of step-mode autofocuses in focus.
+    Settings of a refocus, which keeps the trial frames of step-mode autofunctions in focus.
 
-    While a step-mode autofocus linked to the same imaging has a run in
+    While a step-mode autofunction linked to the same imaging has a run in
     progress, the refocus sweeps its own attribute under the conditions
     of the imaging's next frame, and hands the best value to the imaging.
     """

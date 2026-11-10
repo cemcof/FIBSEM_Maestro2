@@ -4,15 +4,15 @@
 
 from typing import TYPE_CHECKING
 
-from fibsem_maestro.autofocus import SWEEPING_STRATEGIES
-from fibsem_maestro.autofocus.sweep_space import SweepSpace, make_sweep_space
-from fibsem_maestro.autofocus.sweep_step import SweepPoint, SweepStep
+from fibsem_maestro.autofunction import SWEEPING_STRATEGIES
+from fibsem_maestro.autofunction.sweep_space import SweepSpace, make_sweep_space
+from fibsem_maestro.autofunction.sweep_step import SweepPoint, SweepStep
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from fibsem_maestro.autofocus.evaluation import SweepEvaluation
-    from fibsem_maestro.autofocus.result import AutofocusResult
+    from fibsem_maestro.autofunction.evaluation import SweepEvaluation
+    from fibsem_maestro.autofunction.result import AutofunctionResult
     from fibsem_maestro.logging.text.text_logger import TextLogger
     from fibsem_maestro.microscope.abstract_control.beam_control import BeamControl
     from fibsem_maestro.settings.sweeping_settings import SweepingSettings
@@ -112,14 +112,14 @@ class Sweeping:
             for name, component in zip(self.attributes, value, strict=True)
         )
 
-    def evaluate(self, results: list[AutofocusResult]) -> SweepEvaluation:
+    def evaluate(self, results: list[AutofunctionResult]) -> SweepEvaluation:
         """
         Choose the best value from the results of a sweep.
 
         Delegates to the configured sweeping strategy.
 
         Args:
-            results: Autofocus results collected during the sweep, one per submitted job.
+            results: Autofunction results collected during the sweep, one per submitted job.
 
         Returns:
             The strategy's evaluation; its `best` is the value to apply.

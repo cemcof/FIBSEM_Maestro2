@@ -533,7 +533,7 @@ def test_commands_save_properties_lets_every_action_discard_invalidated_state(
 ) -> None:
     first, second = prepared
     replaced: list[Action] = []
-    # e.g. a step-mode autofocus aborts its run when its imaging's props change
+    # e.g. a step-mode autofunction aborts its run when its imaging's props change
     monkeypatch.setattr(second, "_on_properties_replaced", replaced.append)
 
     save_unchanged(services.commands, first)

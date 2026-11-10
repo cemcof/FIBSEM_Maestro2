@@ -8,8 +8,11 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from fibsem_maestro.autofocus.evaluation import BasicEvaluation, InterleavedEvaluation
-from fibsem_maestro.autofocus.sweep_space import CircularSweepSpace, LinearSweepSpace
+from fibsem_maestro.autofunction.evaluation import (
+    BasicEvaluation,
+    InterleavedEvaluation,
+)
+from fibsem_maestro.autofunction.sweep_space import CircularSweepSpace, LinearSweepSpace
 from fibsem_maestro.logging.image.plot import Panel, Plot, Tick
 from fibsem_maestro.logging.image.plot_element import (
     Bars,
@@ -25,9 +28,12 @@ from fibsem_maestro.logging.image.plot_element import (
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-    from fibsem_maestro.autofocus.evaluation import CandidateComparison, SweepEvaluation
-    from fibsem_maestro.autofocus.sweep_space import SweepSpace
-    from fibsem_maestro.autofocus.sweep_step import SweepPoint
+    from fibsem_maestro.autofunction.evaluation import (
+        CandidateComparison,
+        SweepEvaluation,
+    )
+    from fibsem_maestro.autofunction.sweep_space import SweepSpace
+    from fibsem_maestro.autofunction.sweep_step import SweepPoint
 
 _CYCLE_COLORS = ["#1f3a93", "#3d8fe0", "#7b3fbf", "#c2318f", "#e8473a", "#8c1d18"]
 _BASE_COLOR = "orange"
@@ -111,7 +117,7 @@ def _line_chart(
                 legend=True,
             )
         },
-        title="Focus criterion",
+        title="Autofunction criterion",
     )
 
 

@@ -540,13 +540,13 @@ class Action[TSettings: ActionSettingsLike, TState: ActionState](ABC):
         Grab a frame in the current microscope state and save it with this action's slice.
 
         For checking what an action achieved, e.g. the focus after an
-        autofocus. The frame is written next to this action's frames for the
+        autofunction. The frame is written next to this action's frames for the
         current slice, named by `label`, and does not go through the frame
         store, so it never blocks or replaces a slice frame. A failure is
         logged rather than raised, since the frame is only diagnostic.
 
         Args:
-            label: Name part identifying the frame, e.g. `"after_autofocus"`.
+            label: Name part identifying the frame, e.g. `"after_autofunction"`.
         """
         if self._ctx.path_to_dir is None:
             self._ctx.text_logger.warning(

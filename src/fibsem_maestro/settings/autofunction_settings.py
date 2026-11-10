@@ -44,7 +44,7 @@ ScanningArea = Annotated[
         offset=AcquisitionOffset(source="mode.delta_x"),
     ),
 ]
-"""The area an autofocus mode scans during its sweep; empty for the whole frame."""
+"""The area an autofunction mode scans during its sweep; empty for the whole frame."""
 
 
 class BasicMode(BaseSettings):
@@ -297,25 +297,26 @@ AutoscriptMode = Annotated[
     NestedUnion(label="autoscript mode"),
 ]
 
-AutofocusMode = Annotated[
+AutofunctionMode = Annotated[
     BasicMode | LineMode | StepMode | AutoscriptMode,
     Field(discriminator="type"),
 ]
 
 
-class AutofocusSettings(BaseSettings):
+class AutofunctionSettings(BaseSettings):
     linked_imaging: Annotated[
         str, FormHint(widget=WidgetType.ACTION_SELECTOR, action_type_filter=[Imaging])
     ] = Field(
-        default="", description="Name of the imaging action linked to this autofocus."
+        default="",
+        description="Name of the imaging action linked to this autofunction.",
     )
-    mode: AutofocusMode = Field(
+    mode: AutofunctionMode = Field(
         default_factory=BasicMode,
-        description="Autofocus mode to use.",
+        description="Autofunction mode to use.",
     )
     beam_type: BeamType = Field(
         default=BeamType.ELECTRON,
-        description="Beam on which the autofocus should be performed.",
+        description="Beam on which the autofunction should be performed.",
     )
     max_workers: Annotated[int, Field(gt=0)] = Field(
         default=1,

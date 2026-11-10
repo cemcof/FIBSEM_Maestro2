@@ -484,7 +484,7 @@ class WorkflowSession(QObject):
         Store props for the action's current slice (the properties dialog).
 
         Every action may then discard internal state the new props invalidate
-        (`Action.replace_properties`), e.g. a step-mode autofocus run. The
+        (`Action.replace_properties`), e.g. a step-mode autofunction run. The
         action's `settings.yaml` is also written for that slice.
 
         Args:

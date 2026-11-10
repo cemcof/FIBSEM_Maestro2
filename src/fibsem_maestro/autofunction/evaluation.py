@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from fibsem_maestro.autofocus.sweep_step import SweepPoint
+    from fibsem_maestro.autofunction.sweep_step import SweepPoint
 
 
 @dataclass(frozen=True)

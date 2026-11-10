@@ -24,7 +24,7 @@ class SweepStep:
         value: The values of the swept attributes to apply at this step.
         index: Global sequential index of this step across all cycles.
         line_index: Row index of this step in the acquired image, used by
-            line autofocus to map sharpness results back to their position
+            line autofunction to map sharpness results back to their position
             in the image for logging. `None` for modes that do not operate
             on individual image rows.
     """
