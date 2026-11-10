@@ -22,9 +22,12 @@ from fibsem_maestro.autofocus.sweep_step import SweepPoint, SweepStep
 from fibsem_maestro.core.frequency import Every
 from fibsem_maestro.logging.text.contextual import ContextualTextLogger
 from fibsem_maestro.microscope.microscope import Microscope
+from fibsem_maestro.properties.beam_properties import BeamProperties
+from fibsem_maestro.properties.global_properties import GlobalProperties
 from fibsem_maestro.settings.autofocus_settings import BasicMode as BasicModeSettings
 from fibsem_maestro.settings.autofocus_settings import StepMode as StepModeSettings
 from fibsem_maestro.settings.microscope_settings import MicroscopeSettings
+from fibsem_maestro.settings.property_names import PropertyNames
 from fibsem_maestro.settings.sweeping_settings import (
     InterleavedStrategy as InterleavedStrategySettings,
 )
@@ -391,3 +394,124 @@ def test_state_saved_without_a_waiting_request_still_loads(tmp_path: Path) -> No
     file.write_text("sweeps_done: 0\n", encoding="utf-8")
 
     assert AutofocusState.from_file(file).queued_since is None
+
+
+def _next_frame_wd(imaging: Action) -> float:
+    """Working distance of the imaging's next frame (nm)."""
+    props = imaging.read_properties().electron_beam
+    assert props is not None and props.working_distance is not None
+    return props.working_distance
+
+
+@pytest.fixture
+def running(
+    workflow: Workflow,
+    add_action: Callable[..., Action],
+    add_step_af: Callable[..., Autofocus],
+) -> tuple[Action, Autofocus]:
+    """An imaging and a step-mode autofocus whose run is in progress, after slice 1."""
+    imaging = add_action(
+        "imaging",
+        "imaging",
+        properties_to_collect=PropertyNames(electron_beam=["working_distance"]),
+    )
+    autofocus = add_step_af("af")
+    _run_slice(workflow)
+    assert autofocus.run_in_progress
+    return imaging, autofocus
+
+
+def _stored_state(autofocus: Autofocus) -> AutofocusState:
+    return autofocus.ctx.state_store.read("state.yaml", AutofocusState)
+
+
+def test_new_properties_of_a_step_autofocus_abort_its_run_and_restore_the_imaging(
+    running: tuple[Action, Autofocus],
+) -> None:
+    imaging, autofocus = running
+    base = autofocus.state.sweep_base_value
+    assert base is not None
+    assert _next_frame_wd(imaging) != pytest.approx(base[0])
+
+    autofocus.replace_properties(autofocus.read_properties())
+
+    assert not autofocus.run_in_progress
+    assert not _stored_state(autofocus).sweep_in_progress
+    # the next frame is no longer taken at the trial value
+    assert _next_frame_wd(imaging) == pytest.approx(base[0])
+
+
+def test_preparing_a_step_autofocus_aborts_its_run(
+    running: tuple[Action, Autofocus],
+) -> None:
+    _, autofocus = running
+
+    autofocus.prepare()
+
+    assert not autofocus.run_in_progress
+    assert not _stored_state(autofocus).sweep_in_progress
+
+
+def test_new_properties_of_the_linked_imaging_abort_the_run_and_are_kept(
+    running: tuple[Action, Autofocus],
+) -> None:
+    imaging, autofocus = running
+    edited = GlobalProperties(electron_beam=BeamProperties(working_distance=4.2e6))
+
+    imaging.replace_properties(edited)
+
+    assert not autofocus.run_in_progress
+    assert imaging.read_properties() == edited
+
+
+def test_preparing_the_linked_imaging_aborts_the_run(
+    running: tuple[Action, Autofocus],
+) -> None:
+    imaging, autofocus = running
+
+    imaging.prepare()
+
+    assert not autofocus.run_in_progress
+
+
+def test_new_properties_of_other_actions_keep_the_run(
+    running: tuple[Action, Autofocus],
+    add_action: Callable[..., Action],
+) -> None:
+    _, autofocus = running
+    other = add_action("imaging", "other")
+
+    other.replace_properties(other.read_properties())
+    other.prepare()
+
+    assert autofocus.run_in_progress
+
+
+def test_aborted_run_keeps_a_waiting_request(
+    workflow: Workflow,
+    running: tuple[Action, Autofocus],
+    add_step_af: Callable[..., Autofocus],
+) -> None:
+    _, autofocus = running
+    waiting = add_step_af("waiting", frequency=Every(n=1))
+    _run_slice(workflow)
+    assert waiting.queued_since == 2
+
+    autofocus.replace_properties(autofocus.read_properties())
+
+    assert not autofocus.run_in_progress
+    assert waiting.queued_since == 2
+
+
+def test_settings_change_discarding_the_run_restores_the_imaging(
+    running: tuple[Action, Autofocus],
+) -> None:
+    imaging, autofocus = running
+    base = autofocus.state.sweep_base_value
+    assert base is not None
+
+    autofocus.settings.linked_imaging = "elsewhere"
+
+    assert not autofocus.run_in_progress
+    # restored on the imaging the run patched, not the newly linked one
+    assert _next_frame_wd(imaging) == pytest.approx(base[0])

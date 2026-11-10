@@ -522,3 +522,18 @@ def test_commands_apply_microscope_settings_saves_profile_on_request(
 
     services.commands.apply_microscope_settings(save_profile=True)
     assert user_config.load_microscope_profile() == services.session.microscope.settings
+
+
+def test_commands_save_properties_lets_every_action_discard_invalidated_state(
+    services: Services,
+    prepared: tuple[Action, Action],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first, second = prepared
+    replaced: list[Action] = []
+    # e.g. a step-mode autofocus aborts its run when its imaging's props change
+    monkeypatch.setattr(second, "_on_properties_replaced", replaced.append)
+
+    save_unchanged(services.commands, first)
+
+    assert replaced == [first]

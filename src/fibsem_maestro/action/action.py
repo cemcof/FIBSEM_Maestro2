@@ -117,6 +117,9 @@ class Action[TSettings: ActionSettingsLike, TState: ActionState](ABC):
         hook, then stores the resulting state for the current slice. The
         properties are captured first, so they reflect the user's setup and
         not whatever the hook leaves on the microscope.
+
+        Finally, every action of the workflow may discard internal state the
+        new properties invalidate (`_on_properties_replaced`).
         """
         if (bt := self.beam_type) is not None:
             self._microscope.set_beam(bt)
@@ -127,6 +130,7 @@ class Action[TSettings: ActionSettingsLike, TState: ActionState](ABC):
         self.write_properties(self.collect_properties())
         self._prepare()
         self._ctx.state_store.write("state.yaml", self.state)
+        self._announce_properties_replaced()
 
     def _prepare(self) -> None:
         """
@@ -434,6 +438,42 @@ class Action[TSettings: ActionSettingsLike, TState: ActionState](ABC):
         store = store or self._ctx.props_store
         self._ctx.text_logger.debug(f"Writing microscope properties for {self.name}.")
         store.write("props.yaml", props)
+
+    def replace_properties(self, props: GlobalProperties) -> None:
+        """
+        Store properties for the current slice from outside the acquisition, e.g. edited ones.
+
+        Unlike `write_properties`, which the workflow uses for the properties
+        it produces, propagates and carries over, every action of the
+        workflow may then discard internal state the new properties
+        invalidate (`_on_properties_replaced`).
+
+        Args:
+            props: The properties to store.
+        """
+        self.write_properties(props)
+        self._announce_properties_replaced()
+
+    def _announce_properties_replaced(self) -> None:
+        """Let every action of the workflow, and this one, react to its new properties."""
+        others = [action for action in self._actions if action is not self]
+        for action in (self, *others):
+            action._on_properties_replaced(self)
+
+    def _on_properties_replaced(self, of: Action) -> None:
+        """
+        Discard internal state that new properties of an action invalidate.
+
+        Called on every action of the workflow, including `of` itself, after
+        properties were stored for `of` from outside the acquisition: by
+        Prepare, or as edited properties (`replace_properties`). Never for
+        the properties the workflow writes itself. Does nothing by default:
+        e.g. the position of a milling does not depend on any properties.
+
+        Args:
+            of: The action whose properties were replaced.
+        """
+        _ = of
 
     def has_stored_properties(self) -> bool:
         """

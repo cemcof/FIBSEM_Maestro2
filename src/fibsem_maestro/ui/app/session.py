@@ -480,7 +480,9 @@ class WorkflowSession(QObject):
         """
         Store props for the action's current slice (the properties dialog).
 
-        The action's `settings.yaml` is also written for that slice.
+        Every action may then discard internal state the new props invalidate
+        (`Action.replace_properties`), e.g. a step-mode autofocus run. The
+        action's `settings.yaml` is also written for that slice.
 
         Args:
             action: The action.
@@ -490,7 +492,7 @@ class WorkflowSession(QObject):
             Exception: Whatever the props or settings store raises; nothing is
                 emitted then.
         """
-        action.write_properties(props)
+        action.replace_properties(props)
         self._write_action_settings(action)
         self.action_props_changed.emit(action)
 

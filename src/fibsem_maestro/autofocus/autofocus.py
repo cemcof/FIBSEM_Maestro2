@@ -2,7 +2,7 @@
 # Copyright (c) 2024-2026 CEMCOF
 
 
-from dataclasses import field
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from fibsem_maestro.action.action import Action
@@ -35,6 +35,7 @@ if TYPE_CHECKING:
         SweepStep,
     )
     from fibsem_maestro.core.area import RelativeArea
+    from fibsem_maestro.core.beam_type import BeamType
     from fibsem_maestro.microscope.microscope import Microscope
     from fibsem_maestro.settings.reactive import ChangePath
     from fibsem_maestro.workflow.actions import Actions
@@ -62,6 +63,25 @@ def _with_point_value(result: Any) -> Any:
         return {**result, "sweep": {**sweep, "value": (float(value),)}}
 
     return result
+
+
+@dataclass(frozen=True)
+class _TrialTarget:
+    """
+    Where a step-mode sweep puts its trial values, kept for restoring the imaging.
+
+    Captured when the sweep starts, since the settings may have changed by
+    the time the sweep is discarded.
+
+    Attributes:
+        imaging: The linked imaging whose upcoming properties get the trial values.
+        beam: The beam whose properties are patched.
+        attributes: Names of the swept attributes, in sweep-point order.
+    """
+
+    imaging: Imaging
+    beam: BeamType
+    attributes: tuple[str, ...]
 
 
 @ACTION_REGISTRY.register("autofocus")
@@ -98,6 +118,10 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
         # the step-mode sweep in progress, advanced once per slice
         self._active_gen: Generator[SweepStep] | None = None
         self._current_step_index = 0
+
+        # where the step-mode sweep in progress puts its trial values; None
+        # while no step-mode sweep is in progress
+        self._trial_target: _TrialTarget | None = None
 
         # slice of the step-mode run request waiting for the linked imaging
         self._queued_since: int | None = None
@@ -202,9 +226,11 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
             f"Restoring state of '{self.name}': sweep in progress, resuming from "
             f"global step index {state.current_step_index}."
         )
+        imaging = self._resolve_imaging()
         self._active_gen = self._runner.execute(
-            self._resolve_imaging(), resume_from=state.current_step_index
+            imaging, resume_from=state.current_step_index
         )
+        self._trial_target = self._trial_target_for(imaging)
 
     def should_execute(self) -> bool:
         """
@@ -365,6 +391,7 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
         self._runner.begin_sweep()
         self._current_step_index = 0
         self._active_gen = self._runner.execute(imaging)
+        self._trial_target = self._trial_target_for(imaging)
 
     def _check_step_mode_imaging(self, imaging: Imaging) -> None:
         """
@@ -435,6 +462,7 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
         finally:
             # clear even if evaluation fails, so the next slice starts afresh
             self._active_gen = None
+            self._trial_target = None
             self._current_step_index = 0
 
         if outcome.sweep_again:
@@ -453,13 +481,93 @@ class Autofocus(Action[AutofocusSettings, AutofocusState]):
 
         return None
 
+    def _on_settings_changed_at(self, path: ChangePath) -> None:
+        """
+        Reset the state if a state-defining field changed, and restore the imaging's value.
+
+        A step-mode run that the change discards no longer needs its trial
+        value in the linked imaging; the value the sweep started from is
+        put back first.
+
+        Args:
+            path: Location of the change relative to the settings.
+        """
+        if self._active_gen is not None and (not path or path[0] in self._STATE_FIELDS):
+            self._restore_imaging()
+        super()._on_settings_changed_at(path)
+
+    def _on_properties_replaced(self, of: Action) -> None:
+        """
+        Abort a step-mode run when its own properties or its imaging's are replaced.
+
+        The run started from the old properties, and its results were scored
+        on frames taken with them. If the autofocus's own properties were
+        replaced, the imaging gets back the value the sweep started from in
+        place of the trial value; new properties of the imaging are kept. A
+        waiting run request is kept: the run will start from the new
+        properties.
+
+        Args:
+            of: The action whose properties were replaced.
+        """
+        if self._active_gen is None:
+            return
+
+        target = self._trial_target
+        own = of is self
+        if not own and (target is None or of is not target.imaging):
+            return
+
+        self._ctx.text_logger.info(
+            f"Aborting the step-mode run of '{self.name}': new properties of "
+            f"'{of.name}' were stored."
+        )
+        if own:
+            self._restore_imaging()
+        self._abort_sweep()
+        self._ctx.state_store.write("state.yaml", self.state)
+
+    def _trial_target_for(self, imaging: Imaging) -> _TrialTarget | None:
+        """Where a sweep on `imaging` puts its trial values; None unless in step mode."""
+        if not self.is_step_mode:
+            return None
+
+        beam = self.beam_type
+        assert beam is not None
+        return _TrialTarget(imaging, beam, self._runner.attributes)
+
+    def _restore_imaging(self) -> None:
+        """
+        Put the value the step-mode sweep started from into the imaging's upcoming properties.
+
+        Replaces the trial value the sweep patched in. Does nothing if no
+        step-mode sweep is in progress, or the imaging stores no properties.
+        """
+        target = self._trial_target
+        base = self._runner.sweep_base_value
+        if target is None or base is None:
+            return
+        if not target.imaging.has_stored_properties():
+            return
+
+        props = target.imaging.read_properties()
+        for name, value in zip(target.attributes, base, strict=True):
+            props.set_property(name, value, target.beam)
+
+        target.imaging.write_properties(props)
+        self._ctx.text_logger.info(
+            f"Restored {dict(zip(target.attributes, base, strict=True))} for the "
+            f"next frame of '{target.imaging.name}'."
+        )
+
     def _abort_sweep(self) -> None:
         """Close and discard the active sweep."""
-        # TODO: the linked imaging keeps the last trial value until the next sweep
+        # TODO: after a failed step the linked imaging keeps the last trial value until the next sweep
         # this should eventually be fixed, but it breaks the current architecture
         assert self._active_gen is not None
         self._active_gen.close()
         self._active_gen = None
+        self._trial_target = None
         self._current_step_index = 0
         self._runner.abort_sweep()
 
