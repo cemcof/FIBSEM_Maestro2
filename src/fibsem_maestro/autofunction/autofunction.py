@@ -48,8 +48,8 @@ class AutofunctionState(ActionState):
     collected_results: list[AutofunctionResult] = field(default_factory=list)
     sweeps_done: int = 0
     last_direction: SweepDirection | None = None
-    # slice on which a step-mode run was requested that is still waiting for
-    # the linked imaging to be free; None if no request is waiting
+    # slice on which a run was requested that is still waiting for the linked
+    # imaging to be free; None if no request is waiting
     queued_since: int | None = None
 
 
@@ -128,7 +128,7 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
         # while no step-mode sweep is in progress
         self._trial_target: _TrialTarget | None = None
 
-        # slice of the step-mode run request waiting for the linked imaging
+        # slice of the run request waiting for the linked imaging
         self._queued_since: int | None = None
 
         # rebuild when the settings the runner is built from change
@@ -185,7 +185,7 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
 
     @property
     def queued_since(self) -> int | None:
-        """Slice the waiting step-mode run was requested on; None if no run waits."""
+        """Slice the waiting run was requested on; None if no run waits."""
         return self._queued_since
 
     @property
@@ -245,11 +245,12 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
         the slice matches the execution frequency, or if the sharpness of the
         linked imaging's latest frame is below `settings.sharpness_limit`.
 
-        A triggered step-mode autofunction may have to wait: per linked imaging,
-        only one step-mode run may be in progress, since each one varies that
-        imaging's frames. The request then waits in first-come order and the
-        run starts as soon as the imaging is free; triggers that arrive while
-        it waits are ignored.
+        A triggered autofunction of any mode may have to wait: per linked
+        imaging, autofunctions run one at a time. A step-mode run occupies the
+        imaging for several slices, since it varies the imaging's frames; any
+        other run started meanwhile would confound its trials. The request then
+        waits in first-come order and the run starts as soon as the imaging is
+        free; triggers that arrive while it waits are ignored.
 
         Returns:
             `True` if autofunction should run for this slice.
@@ -257,24 +258,18 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
         if self._active_gen is not None:
             return True
 
-        if not self.is_step_mode:
-            # a request left from before a switch away from step mode runs now
-            triggered = self._queued_since is not None or self._is_triggered()
-            self._queued_since = None
-            return triggered
-
         if self._queued_since is None:
             if not self._is_triggered():
                 return False
             self._queued_since = self._ctx.slice
 
-        if (blocker := _blocking_step_autofunction(self, self._actions)) is not None:
+        if (blocker := _blocking_autofunction(self, self._actions)) is not None:
             self._log_waiting(blocker)
             return False
 
         if self._queued_since < self._ctx.slice:
             self._ctx.text_logger.info(
-                f"'{self.name}' starts the step-mode run requested on slice "
+                f"'{self.name}' starts the run requested on slice "
                 f"{self._queued_since}; autofunction queue of '{self._settings.linked_imaging}' is free."
             )
         self._queued_since = None
@@ -314,7 +309,7 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
 
     def _log_waiting(self, blocker: Autofunction) -> None:
         """
-        Log that the waiting step-mode run cannot start yet.
+        Log that the waiting run cannot start yet.
 
         Logged at info level on the slice the request was made, at debug level
         on the slices it keeps waiting.
@@ -587,19 +582,20 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
         self._runner.abort_sweep()
 
 
-def _blocking_step_autofunction(
+def _blocking_autofunction(
     candidate: Autofunction, actions: Actions
 ) -> Autofunction | None:
     """
-    Return the step-mode autofunction that `candidate` has to wait for, if any.
+    Return the autofunction that `candidate` has to wait for, if any.
 
-    Step-mode autofunctions linked to the same imaging run one at a time. A run in
-    progress blocks the others until it ends, including the sweeps that follow
-    it. Waiting requests start in the order of the slice they were made on;
-    ties go to the autofunction earlier in the workflow.
+    Autofunctions linked to the same imaging run one at a time, whatever their
+    mode. A run in progress (only a step-mode run lasts beyond its slice)
+    blocks the others until it ends, including the sweeps that follow it.
+    Waiting requests start in the order of the slice they were made on; ties
+    go to the autofunction earlier in the workflow.
 
     Args:
-        candidate: A step-mode autofunction with a waiting request.
+        candidate: An autofunction with a waiting request.
         actions: Every action of the workflow, in workflow order.
 
     Returns:
@@ -625,7 +621,7 @@ def _blocking_step_autofunction(
     waiting = [
         ((rival.queued_since, position[id(rival)]), rival)
         for rival in rivals
-        if rival.is_step_mode and rival.queued_since is not None
+        if rival.queued_since is not None
     ]
     ahead = [(place, rival) for place, rival in waiting if place < own_place]
     return min(ahead, key=lambda item: item[0])[1] if ahead else None

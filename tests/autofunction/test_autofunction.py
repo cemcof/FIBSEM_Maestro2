@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from fibsem_maestro.action.action import Action
+    from fibsem_maestro.action.outcome import StepOutcome
     from fibsem_maestro.autofunction.evaluation import BasicEvaluation
 
 SPACE = LinearSweepSpace("working_distance", (-2.0, 2.0), 3)
@@ -372,25 +373,105 @@ def test_removing_the_running_autofunction_frees_the_imaging(
     assert second.queued_since is None
 
 
-def test_basic_autofunction_is_not_blocked_by_a_step_run(
+@pytest.fixture
+def add_basic_af(
+    add_action: Callable[..., Action], monkeypatch: pytest.MonkeyPatch
+) -> Callable[..., tuple[Autofunction, list[int]]]:
+    """
+    Add a basic working-distance autofunction linked to `imaging`.
+
+    Returns it with the list of slices it ran on, which grows as it runs.
+    """
+
+    def add(name: str, frequency: Every = ONCE) -> tuple[Autofunction, list[int]]:
+        action = add_action(
+            "autofunction",
+            name,
+            linked_imaging="imaging",
+            mode=BasicModeSettings(
+                sweeping=LinearSweeping(
+                    target_attribute="working_distance",
+                    range=(-1000.0, 1000.0),
+                    steps=STEPS,
+                ),
+                criterion=CRITERION,
+            ),
+            execution_frequency=frequency,
+        )
+        assert isinstance(action, Autofunction)
+        ran: list[int] = []
+        run_step = action._run_step
+
+        def recording_run_step() -> StepOutcome:
+            ran.append(action.ctx.slice)
+            return run_step()
+
+        monkeypatch.setattr(action, "_run_step", recording_run_step)
+        return action, ran
+
+    return add
+
+
+def test_basic_autofunction_waits_for_the_step_run_on_its_imaging(
     workflow: Workflow,
     add_action: Callable[..., Action],
     add_step_af: Callable[..., Autofunction],
+    add_basic_af: Callable[..., tuple[Autofunction, list[int]]],
 ) -> None:
     add_action("imaging", "imaging")
     step = add_step_af("step")
-    workflow.run(last_slice=1)
-    assert step.run_in_progress
+    # requested on slice 1, while the step run is in progress
+    basic, ran = add_basic_af("basic")
 
-    basic = add_action(
-        "autofunction",
-        "basic",
-        linked_imaging="imaging",
-        mode=BasicModeSettings(),
-        execution_frequency=Every(n=1),
-    )
+    history = _run(workflow, STEPS + 2, step)
 
-    assert basic.should_execute()
+    step_slices = _running_slices(history, 0)
+    assert len(step_slices) == STEPS
+    # rows start at slice 1; the run ends on the slice after its last row in
+    # progress, and the basic run follows on that slice (it comes later)
+    assert ran == [step_slices[-1] + 2]
+    assert basic.queued_since is None
+
+
+def test_step_autofunction_waits_for_a_basic_request_made_before_it(
+    workflow: Workflow,
+    add_action: Callable[..., Action],
+    add_step_af: Callable[..., Autofunction],
+    add_basic_af: Callable[..., tuple[Autofunction, list[int]]],
+) -> None:
+    add_action("imaging", "imaging")
+    running = add_step_af("running")
+    # requested on slice 1, behind the running step run
+    _, ran = add_basic_af("basic")
+    workflow.run(last_slice=2)
+    # requested on slice 3, behind the waiting basic request, but placed before it:
+    # when the running run ends, it is asked first
+    late = add_step_af("late", frequency=Every(n=1), index=2)
+
+    first = workflow.ctx.slice  # the slice of the first row of the history
+    history = _run(workflow, 2 * STEPS, running, late)
+
+    # the slice its run ends on is the first after its rows in progress
+    run_end = first + _running_slices(history, 0)[-1] + 1
+    late_start = first + _running_slices(history, 1)[0]
+    # first come, first served, although `late` is asked first on that slice
+    assert ran == [run_end]
+    assert late_start == run_end + 1
+
+
+def test_basic_autofunction_runs_on_its_slice_while_the_imaging_is_free(
+    workflow: Workflow,
+    add_action: Callable[..., Action],
+    add_basic_af: Callable[..., tuple[Autofunction, list[int]]],
+) -> None:
+    add_action("imaging", "imaging")
+    _, first_ran = add_basic_af("first")
+    _, second_ran = add_basic_af("second")
+
+    _run_slice(workflow)
+
+    # both complete within the slice, one after the other
+    assert first_ran == second_ran == [1]
 
 
 def test_waiting_request_survives_saving_the_state(tmp_path: Path) -> None:
