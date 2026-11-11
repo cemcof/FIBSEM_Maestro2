@@ -7,6 +7,9 @@ from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, ClassVar, TypeVar, final
 
+from pydantic import BaseModel
+
+from fibsem_maestro.action.defaults import ActionDefaults
 from fibsem_maestro.action.outcome import CarriedOver, Produced, StepOutcome
 from fibsem_maestro.action.settings_protocol import ActionSettingsLike
 from fibsem_maestro.action.state import ActionState
@@ -14,6 +17,7 @@ from fibsem_maestro.core.area import RelativeArea
 from fibsem_maestro.core.beam_type import BeamType
 from fibsem_maestro.core.format import ImageFormat
 from fibsem_maestro.logging.logging import with_logging_context
+from fibsem_maestro.settings.dynamic_default import unavailable_defaults
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -21,7 +25,9 @@ if TYPE_CHECKING:
     from fibsem_maestro.action_context.action_context import ActionContext
     from fibsem_maestro.microscope.abstract_control.beam_control import BeamControl
     from fibsem_maestro.microscope.microscope import Microscope
+    from fibsem_maestro.properties.beam_properties import BeamProperties
     from fibsem_maestro.properties.global_properties import GlobalProperties
+    from fibsem_maestro.settings.dynamic_default import DefaultContext
     from fibsem_maestro.settings.property_names import PropertyNames
     from fibsem_maestro.settings.reactive import ChangePath
     from fibsem_maestro.store.props.props_store import PropsStore
@@ -158,9 +164,61 @@ class Action[TSettings: ActionSettingsLike, TState: ActionState](ABC):
         exists is fine).
 
         Returns:
-            Human-readable problems; empty if the action is ready. The default reports none.
+            Human-readable problems; empty if the action is ready. The default
+            reports the fields following a default that cannot be computed
+            (`_default_issues`).
         """
-        return []
+        return self._default_issues()
+
+    def _default_issues(self) -> list[str]:
+        """
+        Report the settings fields following a dynamic default that cannot be computed.
+
+        Returns:
+            One "'<dotted path>': <reason>" line per such field.
+        """
+        if not isinstance(self._settings, BaseModel):
+            return []
+        return [
+            f"'{path}': {reason}"
+            for path, reason in unavailable_defaults(
+                self._settings, self.default_context()
+            )
+        ]
+
+    def default_context(self) -> DefaultContext:
+        """
+        What the dynamic defaults of the action's settings are computed from now.
+
+        Returns:
+            The action's settings, the workflow's actions and the action's
+            stored properties (`stored_beam_properties`).
+        """
+        return ActionDefaults(
+            self._settings, self._actions, self.stored_beam_properties
+        )
+
+    def stored_beam_properties(self) -> BeamProperties | None:
+        """
+        The properties stored for the current slice, on the action's beam.
+
+        These are the properties the action applies before it runs, so the
+        defaults computed from them match what it works with. Read from the
+        store without logging, since the forms ask after every change.
+
+        Returns:
+            The beam's stored properties, or None if the action works on no
+            beam, or none are stored or they cannot be read.
+        """
+        beam = self.beam_type
+        if beam is None or not self.has_stored_properties():
+            return None
+        try:
+            props = self._ctx.props_store.read("props.yaml")
+        # a validation error of the props file is a ValueError
+        except OSError, ValueError:
+            return None
+        return getattr(props, props.get_properties_attr_name(beam))
 
     def completion_reason(self) -> str | None:
         """

@@ -24,7 +24,7 @@ from gui_testkit.driving import (
     press,
     task_running,
 )
-from gui_testkit.forms import children
+from gui_testkit.forms import children, editor_at, field_at
 from gui_testkit.workflows import simulated_workflow
 from PyQt6.QtWidgets import (
     QDialogButtonBox,
@@ -36,15 +36,18 @@ from PyQt6.QtWidgets import (
 
 from fibsem_maestro.action.registry import ACTION_REGISTRY
 from fibsem_maestro.core.area import RelativeArea
+from fibsem_maestro.core.detail_band import DetailBand
 from fibsem_maestro.core.direction import Direction
 from fibsem_maestro.core.registry import Registry
 from fibsem_maestro.milling.milling import MillingState
 from fibsem_maestro.properties.beam_properties import BeamProperties
 from fibsem_maestro.properties.global_properties import GlobalProperties
+from fibsem_maestro.settings.autofunction_settings import BasicMode as BasicModeSettings
 from fibsem_maestro.settings.form_utils import AreaOverlay
 from fibsem_maestro.settings.post_milling_correction_settings import (
     geometric_correction,
 )
+from fibsem_maestro.settings.sweeping_settings import LinearSweeping
 from fibsem_maestro.ui.actions_ui import spec as actions_ui_spec
 from fibsem_maestro.ui.actions_ui.default_tools import DEFAULT_TOOLS, TEST_TOOL
 from fibsem_maestro.ui.actions_ui.spec import (
@@ -706,3 +709,58 @@ def test_action_panel_correction_offers_no_correction_to_correct(
     ]
 
     assert offered == ["imaging", "milling"]
+
+
+def _following(app: Composition, action: Action, path: str) -> DynamicDefaultWidget:
+    editor = field_at(panel_of(app, action).form.widget, path)
+    assert isinstance(editor, DynamicDefaultWidget)
+    return editor
+
+
+def test_action_panel_defaults_inside_unions_follow_the_stored_properties(
+    app: Composition,
+) -> None:
+    autofunction = app.commands.add_action("autofunction", "focus")
+    shown(app, autofunction)
+    sweep_range = _following(app, autofunction, "mode.sweeping.range")
+    detail = _following(app, autofunction, "mode.criterion.sharpness_metric.detail")
+    assert [i.message for i in sweep_range.issues()] == [
+        ("Computed from the field width once the action is prepared; or set a range.")
+    ]
+
+    app.session.write_properties(
+        autofunction,
+        GlobalProperties(
+            electron_beam=BeamProperties(
+                horizontal_field_width=10_000.0, pixel_size=5.0
+            )
+        ),
+    )
+
+    assert sweep_range.inner.get_value() == pytest.approx((-500.0, 500.0))
+    assert detail.inner.get_value() == DetailBand(low=300.0, high=500.0)
+    assert sweep_range.issues() == [] and detail.issues() == []
+    assert sweep_range.following and detail.following
+    # still following in the settings, too
+    mode = autofunction.settings.mode
+    assert isinstance(mode, BasicModeSettings)
+    assert isinstance(mode.sweeping, LinearSweeping) and mode.sweeping.range is None
+
+
+def test_action_panel_range_default_depends_on_the_swept_attribute(
+    app: Composition,
+) -> None:
+    autofunction = app.commands.add_action("autofunction", "focus")
+    shown(app, autofunction)
+    app.session.write_properties(
+        autofunction,
+        GlobalProperties(electron_beam=BeamProperties(horizontal_field_width=10_000.0)),
+    )
+    form = panel_of(app, autofunction).form.widget
+
+    editor_at(form, "mode.sweeping.target_attribute").set_value("dwell_time")
+
+    sweep_range = _following(app, autofunction, "mode.sweeping.range")
+    assert [i.message for i in sweep_range.issues()] == [
+        "There is no default range for sweeping 'dwell_time'; set a range."
+    ]

@@ -116,7 +116,9 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
         super().__init__(name, microscope, settings, ctx, actions)
 
         # mode, sweeping, sharpness jobs and the bookkeeping of a run
-        self._runner = SweepRunner(microscope, settings, ctx, settings.beam_type)
+        self._runner = SweepRunner(
+            microscope, settings, ctx, settings.beam_type, self.default_context()
+        )
 
         # the step-mode sweep in progress, advanced once per slice
         self._active_gen: Generator[SweepStep] | None = None

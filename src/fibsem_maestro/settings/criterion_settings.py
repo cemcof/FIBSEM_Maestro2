@@ -1,8 +1,9 @@
 # Released under GPL-3.0 License.
 # Copyright (c) 2024-2026 CEMCOF
 
+"""Settings of the sharpness criteria; the detail band defaults to the stored pixel size."""
 
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import AfterValidator, Field
 
@@ -10,6 +11,12 @@ from fibsem_maestro.core.area import RelativeArea
 from fibsem_maestro.core.detail_band import DetailBand
 from fibsem_maestro.criterion.reductors import REDUCTORS
 from fibsem_maestro.settings.base_settings import BaseSettings
+from fibsem_maestro.settings.dynamic_default import (
+    DefaultContext,
+    DynamicDefault,
+    properties_missing,
+    properties_not_collected,
+)
 from fibsem_maestro.settings.form_utils import (
     AcquisitionOffset,
     AreaOverlay,
@@ -20,6 +27,12 @@ from fibsem_maestro.settings.form_utils import (
     OverlaySpec,
     WidgetType,
 )
+
+if TYPE_CHECKING:
+    from fibsem_maestro.properties.beam_properties import BeamProperties
+
+DETAIL_BAND_PIXELS = (60.0, 100.0)
+"""The default detail band, in multiples of the pixel size: `(low, high)`."""
 
 ReductionName = Annotated[
     str,
@@ -75,13 +88,58 @@ CriterionTilingMode = Annotated[
 ]
 
 
+def pixel_size_nm(props: BeamProperties) -> float | None:
+    """
+    The pixel size the stored properties set.
+
+    Args:
+        props: Stored properties of a beam.
+
+    Returns:
+        The stored pixel size, or else the field width divided by the
+        resolution's width, in nm; None if the properties hold neither.
+    """
+    if props.pixel_size is not None:
+        return props.pixel_size
+    if props.horizontal_field_width is not None and props.resolution is not None:
+        return props.horizontal_field_width / props.resolution.width
+    return None
+
+
+def _default_detail(metric: object, context: DefaultContext) -> DetailBand | None:
+    """The detail band of `DETAIL_BAND_PIXELS` pixels of the stored properties, in nm."""
+    _ = metric
+    props = context.beam_properties()
+    pixel = None if props is None else pixel_size_nm(props)
+    if pixel is None:
+        return None
+    low, high = DETAIL_BAND_PIXELS
+    return DetailBand(low=low * pixel, high=high * pixel)
+
+
+def _no_default_detail(metric: object, context: DefaultContext) -> str:
+    """Why the detail band cannot be computed: no properties, or no pixel size in them."""
+    _ = metric
+    if context.beam_properties() is None:
+        return properties_missing("pixel size")
+    return properties_not_collected(
+        "pixel size", "'pixel_size', or 'horizontal_field_width' and 'resolution'"
+    )
+
+
 class DetailBandMetric(BaseSettings):
     detail: Annotated[
-        DetailBand,
+        DetailBand | None,
         FormHint(widget=WidgetType.DETAIL_BAND),
         FieldUnit(suffix="nm"),
+        DynamicDefault(
+            _default_detail,
+            _no_default_detail,
+            "the pixel size of the stored properties: details "
+            f"{DETAIL_BAND_PIXELS[0]:g}-{DETAIL_BAND_PIXELS[1]:g} pixels across",
+        ),
     ] = Field(
-        default=DetailBand(low=1.0, high=1.0),
+        default=None,
         description="Bandpass parameters: low and high details to filter out.",
     )
 

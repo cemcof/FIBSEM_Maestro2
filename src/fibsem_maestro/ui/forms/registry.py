@@ -18,6 +18,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Protocol
 
 from fibsem_maestro.core.registry import RegistryError
+from fibsem_maestro.settings.dynamic_default import dynamic_default_of
 from fibsem_maestro.settings.form_utils import WidgetType
 from fibsem_maestro.ui.forms.editor import FieldEditor, OnChange, noop
 from fibsem_maestro.ui.forms.editors.action_multi_select import (
@@ -64,6 +65,10 @@ if TYPE_CHECKING:
     from fibsem_maestro.ui.forms.scope import BuildScope, ObjectPath
     from fibsem_maestro.ui.schema.constraints import NumericBounds
     from fibsem_maestro.ui.schema.field_info import FieldInfo
+
+
+_NO_OWNER = "No default can be computed here; set a value."
+"""Shown on a field following its default where the form holds no settings to compute it from."""
 
 
 class SubBuilder(Protocol):
@@ -241,8 +246,11 @@ class EditorRegistry:
         """
         Build the editor of a field with a dynamic default.
 
-        The default is computed from the live object holding the field, so it
-        cannot be computed in a value-only subtree (or a detached form).
+        The default is computed from the live object holding the field, found
+        by the field's path whenever it is needed: in a live object, and in a
+        value-only subtree too (a union's variant page), as long as the live
+        object at that path is of the class declaring the default. It cannot
+        be computed in list elements or in a detached form.
 
         Args:
             request: The field and its build environment.
@@ -263,17 +271,28 @@ class EditorRegistry:
         )
         scope, ctx = request.scope, request.ctx
 
-        def compute() -> Any:
-            owner = (
-                resolve_path(scope.root, scope.owner)
-                if scope.owner is not None
-                else None
-            )
-            return None if owner is None else declared.compute(owner, ctx.settings_of)
+        def owner() -> object | None:
+            if scope.path is None:
+                return None
+            found = resolve_path(scope.root, scope.path[:-1])
+            # e.g. a variant page showing a variant the settings do not hold
+            if found is None or dynamic_default_of(type(found), fi.name) != declared:
+                return None
+            return found
 
-        editor = DynamicDefaultWidget(
-            inner, compute, declared.unavailable, declared.source
-        )
+        def compute() -> Any:
+            found = owner()
+            if found is None:
+                return None
+            return declared.compute(found, ctx.defaults_for(scope.root))
+
+        def unavailable() -> str:
+            found = owner()
+            if found is None:
+                return _NO_OWNER
+            return declared.reason(found, ctx.defaults_for(scope.root))
+
+        editor = DynamicDefaultWidget(inner, compute, unavailable, declared.source)
         editor.set_value(request.value)
         editor.on_change(request.on_change)
         scope.context.dynamic_defaults.append(editor)

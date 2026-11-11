@@ -13,7 +13,7 @@ from fibsem_maestro.core.direction import Direction
 from fibsem_maestro.core.frequency import Every, Frequency
 from fibsem_maestro.milling.milling import Milling
 from fibsem_maestro.settings.base_settings import BaseSettings
-from fibsem_maestro.settings.dynamic_default import DynamicDefault, SettingsLookup
+from fibsem_maestro.settings.dynamic_default import DefaultContext, DynamicDefault
 from fibsem_maestro.settings.form_utils import FieldUnit, FormHint, WidgetType
 from fibsem_maestro.settings.milling_settings import MillingSettings
 from fibsem_maestro.settings.property_names import PropertyNames
@@ -55,26 +55,27 @@ def geometric_correction(milling: MillingSettings) -> tuple[float, float]:
 
 
 def _linked_milling(
-    settings: PostMillingCorrectionSettings, lookup: SettingsLookup
+    settings: PostMillingCorrectionSettings, context: DefaultContext
 ) -> MillingSettings | None:
     """The settings of the linked milling, or None if no milling is linked."""
-    linked = lookup(settings.linked_milling) if settings.linked_milling else None
+    name = settings.linked_milling
+    linked = context.settings_of(name) if name else None
     return linked if isinstance(linked, MillingSettings) else None
 
 
 def _default_y_correction(
-    settings: PostMillingCorrectionSettings, lookup: SettingsLookup
+    settings: PostMillingCorrectionSettings, context: DefaultContext
 ) -> float | None:
     """The vertical image shift of the linked milling's geometry, in nm."""
-    milling = _linked_milling(settings, lookup)
+    milling = _linked_milling(settings, context)
     return None if milling is None else geometric_correction(milling)[0]
 
 
 def _default_wd_correction(
-    settings: PostMillingCorrectionSettings, lookup: SettingsLookup
+    settings: PostMillingCorrectionSettings, context: DefaultContext
 ) -> float | None:
     """The working-distance change of the linked milling's geometry, in nm."""
-    milling = _linked_milling(settings, lookup)
+    milling = _linked_milling(settings, context)
     return None if milling is None else geometric_correction(milling)[1]
 
 
@@ -96,7 +97,8 @@ class PostMillingCorrectionSettings(BaseSettings):
         str, FormHint(widget=WidgetType.ACTION_SELECTOR, action_type_filter=[Milling])
     ] = Field(
         default="",
-        description="Milling whose slice distance and direction the default corrections are computed from.",
+        description="Milling whose slice distance and direction the default "
+        "corrections are computed from.",
     )
     corrected_actions: Annotated[
         list[str],
@@ -108,7 +110,8 @@ class PostMillingCorrectionSettings(BaseSettings):
         ),
     ] = Field(
         default_factory=list,
-        description="Actions whose image position and working distance follow the receding cross-section face.",
+        description="Actions whose image position and working distance follow the "
+        "receding cross-section face.",
     )
     y_correction: Annotated[
         float | None,

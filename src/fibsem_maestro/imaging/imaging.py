@@ -19,6 +19,10 @@ from fibsem_maestro.criterion.criterion import Criterion
 from fibsem_maestro.imaging.error import ImagingError
 from fibsem_maestro.logging.logging import with_logging_context
 from fibsem_maestro.microscope.error import MicroscopeError
+from fibsem_maestro.settings.dynamic_default import (
+    DefaultUnavailableError,
+    with_defaults,
+)
 from fibsem_maestro.settings.imaging_settings import (
     ExtendedResolution,
     ImagingSettings,
@@ -30,6 +34,7 @@ if TYPE_CHECKING:
     from fibsem_maestro.action_context.action_context import ActionContext
     from fibsem_maestro.core.image import Image
     from fibsem_maestro.microscope.microscope import Microscope
+    from fibsem_maestro.settings.criterion_settings import CriterionSettings
     from fibsem_maestro.slice.slice_view import SliceView
     from fibsem_maestro.workflow.actions import Actions
 
@@ -116,7 +121,10 @@ class Imaging(Action[ImagingSettings, ImagingState]):
                 f"Restoring state of '{self.name}': image sharpness not computed, "
                 "recovering it from the last frame."
             )
-            self._calculate_sharpness(self._last_acquired_image, self._ctx.current_view)
+            if (criterion := self._resolved_criterion()) is not None:
+                self._calculate_sharpness(
+                    self._last_acquired_image, self._ctx.current_view, criterion
+                )
 
     def _read_last_frame(self) -> Image | None:
         """
@@ -187,11 +195,15 @@ class Imaging(Action[ImagingSettings, ImagingState]):
             )
             return
 
+        criterion = self._resolved_criterion()
+        if criterion is None:
+            return
+
         # run in a copy of the logging context, addressed to this slice
         ctx_snapshot = contextvars.copy_context()
         self._sharpness_thread = threading.Thread(
             target=ctx_snapshot.run,
-            args=(self._calculate_sharpness, image, self._ctx.current_view),
+            args=(self._calculate_sharpness, image, self._ctx.current_view, criterion),
         )
         self._sharpness_thread.start()
 
@@ -262,7 +274,30 @@ class Imaging(Action[ImagingSettings, ImagingState]):
     def wait_for_background_threads(self) -> None:
         self.wait_for_sharpness()
 
-    def _calculate_sharpness(self, image: Image, view: SliceView) -> None:
+    def _resolved_criterion(self) -> CriterionSettings | None:
+        """
+        The criterion settings with their dynamic defaults computed from the stored properties.
+
+        Computed on the acquiring thread, before the calculation starts, from
+        the properties stored for the current slice.
+
+        Returns:
+            The settings, or None (with a warning logged) if no criterion is
+            configured or a default cannot be computed.
+        """
+        if self._settings.criterion is None:
+            return None
+        try:
+            return with_defaults(self._settings.criterion, self.default_context())
+        except DefaultUnavailableError as e:
+            self._ctx.text_logger.warning(
+                f"Image sharpness will not be calculated: {e}"
+            )
+            return None
+
+    def _calculate_sharpness(
+        self, image: Image, view: SliceView, settings: CriterionSettings
+    ) -> None:
         """
         Evaluate image sharpness on a background thread.
 
@@ -274,15 +309,15 @@ class Imaging(Action[ImagingSettings, ImagingState]):
         Args:
             image: The image to evaluate.
             view: The slice view to use for logging.
+            settings: The criterion's settings, with their defaults computed
+                (`_resolved_criterion`).
         """
-        assert self._settings.criterion is not None
-
         # get logger for the slice corresponding to the provided view
         text_logger = self._ctx.text_logger.at(view.slice_index)
         image_logger = self._ctx.image_logger.at(view.slice_index)
 
         criterion = Criterion(
-            self._settings.criterion,
+            settings,
             text_logger.derive("criterion"),
             image_logger,
         )

@@ -13,6 +13,8 @@ if TYPE_CHECKING:
 
     from fibsem_maestro.core.pattern_type import PatternType
     from fibsem_maestro.logging.text.text_logger import TextLogger
+    from fibsem_maestro.properties.beam_properties import BeamProperties
+    from fibsem_maestro.settings.dynamic_default import DefaultContext
     from fibsem_maestro.ui.ports import ActionCatalog, PreviewPermission, PreviewPort
 
 
@@ -34,6 +36,10 @@ class FormContext:
         state_fields: Top-level fields of the root object whose change resets
             the internal state of that action (`Action.state_fields`); their
             labels are marked.
+        beam_properties: Returns the stored properties on the beam of the
+            action whose settings the form edits (`Action.stored_beam_properties`),
+            for dynamic defaults computed from them; None outside an action's
+            panel.
     """
 
     log: TextLogger | None = None
@@ -44,6 +50,7 @@ class FormContext:
     preview_permission: PreviewPermission | None = None
     state: Callable[[], object] | None = None
     state_fields: frozenset[str] = frozenset()
+    beam_properties: Callable[[], BeamProperties | None] | None = None
 
     def choice_context(self) -> ChoiceContext:
         """The parts `choices_for` needs."""
@@ -70,6 +77,19 @@ class FormContext:
         action = next((a for a in self.actions.actions if a.name == name), None)
         return None if action is None else action.settings
 
+    def defaults_for(self, settings: object | None) -> DefaultContext:
+        """
+        What the dynamic defaults of the form's fields are computed from.
+
+        Args:
+            settings: The settings the form edits (its live root), or None.
+
+        Returns:
+            A `DefaultContext` over `settings`, the workflow's actions and the
+            stored properties of the action whose settings are edited.
+        """
+        return _FormDefaults(self, settings)
+
     def warn(self, message: str) -> None:
         """
         Log a build-time warning, if a logger was supplied.
@@ -79,3 +99,39 @@ class FormContext:
         """
         if self.log is not None:
             self.log.warning(message)
+
+
+class _FormDefaults:
+    """
+    The `DefaultContext` of a form.
+
+    Args:
+        form: The form's environment.
+        settings: The settings the form edits, or None.
+    """
+
+    def __init__(self, form: FormContext, settings: object | None) -> None:
+        self._form = form
+        self._settings = settings
+
+    @property
+    def settings(self) -> object | None:
+        """The settings the form edits."""
+        return self._settings
+
+    def settings_of(self, name: str) -> object | None:
+        """
+        The settings of a workflow action.
+
+        Args:
+            name: The action's name.
+
+        Returns:
+            Its settings, or None outside a workflow or if there is no such action.
+        """
+        return self._form.settings_of(name)
+
+    def beam_properties(self) -> BeamProperties | None:
+        """The stored beam properties of the edited action, or None outside its panel."""
+        source = self._form.beam_properties
+        return None if source is None else source()

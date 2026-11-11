@@ -81,6 +81,9 @@ class FormContexts:
             preview_permission=self._permission,
             state=(lambda: action.state) if action is not None else None,
             state_fields=action.state_fields() if action is not None else frozenset(),
+            beam_properties=(
+                action.stored_beam_properties if action is not None else None
+            ),
         )
 
     def for_properties(self, action: Action) -> FormContext:

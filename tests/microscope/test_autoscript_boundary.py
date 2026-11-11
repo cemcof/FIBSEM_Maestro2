@@ -7,6 +7,7 @@ pytest.importorskip("autoscript_sdb_microscope_client")
 
 from autoscript_sdb_microscope_client.sdb_microscope_client import SdbMicroscopeClient
 
+from fibsem_maestro.action.defaults import ActionDefaults
 from fibsem_maestro.autofunction.sweeping import Sweeping
 from fibsem_maestro.core.beam_type import BeamType
 from fibsem_maestro.core.detector_mode import DetectorMode
@@ -45,6 +46,10 @@ def fake_client(monkeypatch: pytest.MonkeyPatch) -> FakeSdbClient:
     return client
 
 
+_NO_DEFAULTS = ActionDefaults(None, (), lambda: None)
+"""The ranges are set: no defaults to compute."""
+
+
 @pytest.fixture
 def autoscript_microscope(fake_client: FakeSdbClient) -> Microscope:
     _ = fake_client  # connects through the fake
@@ -63,6 +68,7 @@ def test_ion_beam_working_distance_can_be_swept(
             target_attribute="working_distance", range=(-1000.0, 1000.0), steps=3
         ),
         MemoryTextLogger(lambda: 0),
+        _NO_DEFAULTS,
     )
     assert len(list(sweeping.sweep())) == 3
 
@@ -77,6 +83,7 @@ def test_sweep_values_outside_instrument_limits_are_skipped(
             target_attribute="working_distance", range=(-50e6, 50e6), steps=3
         ),
         MemoryTextLogger(lambda: 0),
+        _NO_DEFAULTS,
     )
     assert [s.value[0] for s in sweeping.sweep()] == pytest.approx([16.5e6])
 

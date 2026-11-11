@@ -1,12 +1,20 @@
 # Released under GPL-3.0 License.
 # Copyright (c) 2024-2026 CEMCOF
 
+"""Settings of the sweeps; a working-distance range defaults to the stored field width."""
+
 from typing import Annotated, Literal, Self
 
 from pydantic import AfterValidator, ConfigDict, Field, field_validator, model_validator
 
 from fibsem_maestro.properties.beam_properties import BeamProperties
 from fibsem_maestro.settings.base_settings import BaseSettings
+from fibsem_maestro.settings.dynamic_default import (
+    DefaultContext,
+    DynamicDefault,
+    properties_missing,
+    properties_not_collected,
+)
 from fibsem_maestro.settings.form_utils import FormHint, WidgetType
 
 
@@ -77,6 +85,40 @@ TargetAttribute = Annotated[
 """Name of a scalar beam property that a sweep changes."""
 
 
+RANGE_FIELD_DIVISOR = 20
+"""The default working-distance range is ±(horizontal field width / this)."""
+
+_RANGED_ATTRIBUTE = "working_distance"
+"""The attribute whose range has a default."""
+
+
+def _default_range(
+    sweeping: LinearSweeping, context: DefaultContext
+) -> tuple[float, float] | None:
+    """±(stored field width / `RANGE_FIELD_DIVISOR`), for the working distance (nm)."""
+    if sweeping.target_attribute != _RANGED_ATTRIBUTE:
+        return None
+    props = context.beam_properties()
+    if props is None or props.horizontal_field_width is None:
+        return None
+    half = props.horizontal_field_width / RANGE_FIELD_DIVISOR
+    return (-half, half)
+
+
+def _no_default_range(sweeping: LinearSweeping, context: DefaultContext) -> str:
+    """Why the range cannot be computed: another attribute, no properties, or no field width."""
+    if sweeping.target_attribute != _RANGED_ATTRIBUTE:
+        return (
+            f"There is no default range for sweeping '{sweeping.target_attribute}'; "
+            "set a range."
+        )
+    if context.beam_properties() is None:
+        return properties_missing("field width", "a range")
+    return properties_not_collected(
+        "field width", "'horizontal_field_width'", "a range"
+    )
+
+
 class LinearSweeping(BaseSettings):
     """A sweep of one attribute over a range around its current value."""
 
@@ -94,11 +136,18 @@ class LinearSweeping(BaseSettings):
         default_factory=BasicStrategy,
         description="Sweeping strategy to use.",
     )
-    range: Annotated[tuple[float, float], FormHint(widget=WidgetType.RANGE_PAIR)] = (
-        Field(
-            default=(0.0, 0.0),
-            description="Range of the sweep relative to the current value, in units of the attribute.",
-        )
+    range: Annotated[
+        tuple[float, float] | None,
+        FormHint(widget=WidgetType.RANGE_PAIR),
+        DynamicDefault(
+            _default_range,
+            _no_default_range,
+            "the horizontal field width (HFW) of the stored properties: "
+            f"±HFW/{RANGE_FIELD_DIVISOR}, for the working distance",
+        ),
+    ] = Field(
+        default=None,
+        description="Range of the sweep relative to the current value, in units of the attribute.",
     )
     steps: Annotated[int, Field(gt=0)] = Field(
         default=3,
@@ -111,8 +160,8 @@ class LinearSweeping(BaseSettings):
 
     @field_validator("range")
     @classmethod
-    def _check_range(cls, r: tuple[float, float]) -> tuple[float, float]:
-        if r[0] > r[1]:
+    def _check_range(cls, r: tuple[float, float] | None) -> tuple[float, float] | None:
+        if r is not None and r[0] > r[1]:
             raise ValueError(
                 f"First value of 'range' ('{r[0]}') cannot be larger than the second ('{r[1]}')"
             )

@@ -5,7 +5,11 @@
 from typing import TYPE_CHECKING
 
 from fibsem_maestro.autofunction import SWEEPING_STRATEGIES
-from fibsem_maestro.autofunction.sweep_space import SweepSpace, make_sweep_space
+from fibsem_maestro.autofunction.sweep_space import (
+    SweepSpace,
+    make_sweep_space,
+    sweep_attributes,
+)
 from fibsem_maestro.autofunction.sweep_step import SweepPoint, SweepStep
 
 if TYPE_CHECKING:
@@ -15,6 +19,7 @@ if TYPE_CHECKING:
     from fibsem_maestro.autofunction.result import AutofunctionResult
     from fibsem_maestro.logging.text.text_logger import TextLogger
     from fibsem_maestro.microscope.abstract_control.beam_control import BeamControl
+    from fibsem_maestro.settings.dynamic_default import DefaultContext
     from fibsem_maestro.settings.sweeping_settings import SweepingSettings
 
 
@@ -32,6 +37,9 @@ class Sweeping:
         settings: Sweeping configuration: the swept attributes and their
             geometry, the number of cycles, and the strategy.
         txt_log: Logger for sweep-related status and warning messages.
+        defaults: What a range following its default is computed from; it is
+            computed anew at the start of every sweep, so it follows e.g. the
+            field width of the action's stored properties.
     """
 
     def __init__(
@@ -39,11 +47,16 @@ class Sweeping:
         beam: BeamControl,
         settings: SweepingSettings,
         txt_log: TextLogger,
+        defaults: DefaultContext,
     ):
         self._beam = beam
         self._txt_log = txt_log
+        self._settings = settings
+        self._defaults = defaults
         self._cycles = settings.cycles
-        self._space = make_sweep_space(settings)
+        self._attributes = sweep_attributes(settings)
+        # the geometry of the current sweep; built when it starts
+        self._space: SweepSpace | None = None
         self._sweeping_strategy = SWEEPING_STRATEGIES.get(settings.strategy.type)(
             settings.strategy
         )
@@ -51,11 +64,21 @@ class Sweeping:
     @property
     def attributes(self) -> tuple[str, ...]:
         """Names of the swept beam attributes, in the order of a sweep point's values."""
-        return self._space.attributes
+        return self._attributes
 
     @property
     def space(self) -> SweepSpace:
-        """Geometry of the sweep."""
+        """
+        Geometry of the current sweep, fixed when it started.
+
+        Built now if no sweep started yet (e.g. a sweep restored after an interrupt).
+
+        Raises:
+            DefaultUnavailableError: If it has to be built and its range follows
+                a default that cannot be computed.
+        """
+        if self._space is None:
+            self._space = make_sweep_space(self._settings, self._defaults)
         return self._space
 
     def sweep(self) -> Iterator[SweepStep]:
@@ -69,6 +92,8 @@ class Sweeping:
         Yields:
             SweepStep: The next valid sweep step in sequence.
         """
+        # the range may follow a default, e.g. of the current field width
+        self._space = make_sweep_space(self._settings, self._defaults)
         base = self.get_attribute_value()
 
         steps = (
@@ -143,7 +168,7 @@ class Sweeping:
         """
         limits = {name: self._beam.limits(name) for name in self.attributes}
 
-        for value in self._sweeping_strategy.generate(self._space, base, repetition):
+        for value in self._sweeping_strategy.generate(self.space, base, repetition):
             out_of_range = [
                 f"'{name}' = {component} is out of range [{limits[name][0]} - {limits[name][1]}]"
                 for name, component in zip(self.attributes, value, strict=True)

@@ -45,7 +45,8 @@ class DynamicDefaultWidget(QWidget, FieldEditor[T | None]):
     Args:
         inner: The editor of the value; any field type.
         compute: Returns the default now, or None if it cannot be computed.
-        unavailable: The warning shown while the default cannot be computed.
+        unavailable: Returns the warning shown while the default cannot be
+            computed, saying why and what to do.
         source: What the default is computed from, completing "Computed from …".
         parent: The parent widget, if any.
     """
@@ -54,7 +55,7 @@ class DynamicDefaultWidget(QWidget, FieldEditor[T | None]):
         self,
         inner: FieldEditor[T],
         compute: Callable[[], T | None],
-        unavailable: str,
+        unavailable: Callable[[], str],
         source: str = "other settings",
         parent: QWidget | None = None,
     ) -> None:
@@ -125,7 +126,7 @@ class DynamicDefaultWidget(QWidget, FieldEditor[T | None]):
         if value is None:
             self.set_issue(
                 DEFAULT_UNAVAILABLE_ISSUE,
-                FieldIssue(Severity.WARNING, self._unavailable),
+                FieldIssue(Severity.WARNING, self._unavailable()),
             )
             return
 

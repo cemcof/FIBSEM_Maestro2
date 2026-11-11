@@ -19,13 +19,16 @@ from fibsem_maestro.autofunction.jobs_manager import JobsManager
 from fibsem_maestro.autofunction.result import AutofunctionResult
 from fibsem_maestro.autofunction.sweep_space import LinearSweepSpace
 from fibsem_maestro.autofunction.sweep_step import SweepPoint, SweepStep
+from fibsem_maestro.core.detail_band import DetailBand
 from fibsem_maestro.core.frequency import Every
 from fibsem_maestro.logging.text.contextual import ContextualTextLogger
 from fibsem_maestro.microscope.microscope import Microscope
 from fibsem_maestro.properties.beam_properties import BeamProperties
 from fibsem_maestro.properties.global_properties import GlobalProperties
 from fibsem_maestro.settings.autofunction_settings import BasicMode as BasicModeSettings
+from fibsem_maestro.settings.autofunction_settings import CustomCriterion
 from fibsem_maestro.settings.autofunction_settings import StepMode as StepModeSettings
+from fibsem_maestro.settings.criterion_settings import BandpassMetric, CriterionSettings
 from fibsem_maestro.settings.microscope_settings import MicroscopeSettings
 from fibsem_maestro.settings.property_names import PropertyNames
 from fibsem_maestro.settings.sweeping_settings import (
@@ -47,6 +50,11 @@ if TYPE_CHECKING:
 
 SPACE = LinearSweepSpace("working_distance", (-2.0, 2.0), 3)
 BASE: SweepPoint = (0.0,)
+
+CRITERION = CriterionSettings(
+    sharpness_metric=BandpassMetric(detail=DetailBand(low=1.0, high=1.0))
+)
+"""A criterion with its detail band set: the stored properties hold no pixel size."""
 
 
 def _interleaved_results(
@@ -208,6 +216,7 @@ def add_step_af(add_action: Callable[..., Action]) -> Callable[..., Autofunction
                 steps=STEPS,
             ),
             max_sweeps=max_sweeps,
+            criterion=CustomCriterion(criterion=CRITERION),
         )
         action = add_action(
             "autofunction",

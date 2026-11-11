@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from pydantic import ValidationError
 
+from fibsem_maestro.action.defaults import ActionDefaults
 from fibsem_maestro.action_context.memory import MemoryActionContext
 from fibsem_maestro.autofunction.af_chart import af_chart
 from fibsem_maestro.autofunction.autofunction import Autofunction
@@ -22,6 +23,7 @@ from fibsem_maestro.autofunction.sweeping_strategy import (
     InterleavedSweepingStrategy,
     SweepingStrategy,
 )
+from fibsem_maestro.core.detail_band import DetailBand
 from fibsem_maestro.logging.image.plot import Panel, Plot
 from fibsem_maestro.logging.image.plot_element import Bars, Curve, HorizontalLine
 from fibsem_maestro.logging.image.plot_renderer import render_plot
@@ -30,7 +32,7 @@ from fibsem_maestro.settings.autofunction_settings import (
     AutofunctionSettings,
     BasicMode,
 )
-from fibsem_maestro.settings.criterion_settings import CriterionSettings
+from fibsem_maestro.settings.criterion_settings import BandpassMetric, CriterionSettings
 from fibsem_maestro.settings.sweeping_settings import (
     BasicStrategy as BasicStrategySettings,
 )
@@ -172,7 +174,9 @@ class _FakeBeam:
 
 
 def _sweeping(settings: CircularSweepingSettings, beam: _FakeBeam) -> Sweeping:
-    return Sweeping(beam, settings, MemoryTextLogger(lambda: 0))  # ty: ignore[invalid-argument-type]
+    # a 2D sweep has no defaults to compute
+    no_defaults = ActionDefaults(None, (), lambda: None)
+    return Sweeping(beam, settings, MemoryTextLogger(lambda: 0), no_defaults)  # ty: ignore[invalid-argument-type]
 
 
 def test_sweeping_sets_both_attributes_of_a_2d_point() -> None:
@@ -271,7 +275,10 @@ def test_2d_autofunction_moves_the_stigmator_onto_the_circle(
     settings = AutofunctionSettings(
         mode=BasicMode(
             sweeping=CircularSweepingSettings(radius=0.01, steps=6),
-            criterion=CriterionSettings(),
+            # set: the test runs unprepared, without a stored pixel size
+            criterion=CriterionSettings(
+                sharpness_metric=BandpassMetric(detail=DetailBand(low=1.0, high=1.0))
+            ),
         )
     )
     ctx = MemoryActionContext("af")

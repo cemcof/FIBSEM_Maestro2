@@ -126,25 +126,12 @@ class PostMillingCorrection(
         name = self._settings.linked_milling
         if not name:
             return ["No milling is linked to compute the default correction from."]
-        linked = self._settings_of(name)
+        linked = self.default_context().settings_of(name)
         if linked is None:
             return [f"The linked milling '{name}' does not exist."]
         if not isinstance(linked, MillingSettings):
             return [f"The linked action '{name}' is not a milling."]
         return []
-
-    def _settings_of(self, name: str) -> object | None:
-        """
-        The settings of a workflow action, for computing the default corrections.
-
-        Args:
-            name: The action's name.
-
-        Returns:
-            Its settings, or None if the workflow has no such action.
-        """
-        action = next((a for a in self._actions if a.name == name), None)
-        return None if action is None else action.settings
 
     def _target_issues(self, target: Action) -> list[str]:
         """
@@ -174,7 +161,7 @@ class PostMillingCorrection(
         A correction whose default cannot be computed counts as non-zero.
         """
         y_correction, wd_correction = (
-            effective_value(self._settings, name, self._settings_of)
+            effective_value(self._settings, name, self.default_context())
             for name in (_Y_CORRECTION, _WD_CORRECTION)
         )
         names: list[str] = []
@@ -213,7 +200,7 @@ class PostMillingCorrection(
                 the default cannot be computed.
         """
         y_correction, wd_correction = (
-            effective_value(self._settings, name, self._settings_of)
+            effective_value(self._settings, name, self.default_context())
             for name in (_Y_CORRECTION, _WD_CORRECTION)
         )
         if y_correction is None or wd_correction is None:

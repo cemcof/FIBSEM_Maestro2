@@ -11,10 +11,13 @@ from fibsem_maestro.autofunction.autofunction import Autofunction
 from fibsem_maestro.autofunction.refocus import Refocus, RefocusState
 from fibsem_maestro.autofunction.sweeping_strategy import BasicSweepingStrategy
 from fibsem_maestro.core.beam_type import BeamType
+from fibsem_maestro.core.detail_band import DetailBand
 from fibsem_maestro.core.frequency import Every
 from fibsem_maestro.imaging.imaging import Imaging
 from fibsem_maestro.settings.autofunction_settings import BasicMode as BasicModeSettings
+from fibsem_maestro.settings.autofunction_settings import CustomCriterion
 from fibsem_maestro.settings.autofunction_settings import StepMode as StepModeSettings
+from fibsem_maestro.settings.criterion_settings import BandpassMetric, CriterionSettings
 from fibsem_maestro.settings.property_names import PropertyNames
 from fibsem_maestro.settings.sweeping_settings import CircularSweeping, LinearSweeping
 from fibsem_maestro.workflow.propagations import PropagationRule, Propagations
@@ -36,6 +39,11 @@ RADIUS = 0.01
 
 # triggers on slice 1 only, within the length of these tests
 ONCE = Every(n=1000)
+
+CRITERION = CriterionSettings(
+    sharpness_metric=BandpassMetric(detail=DetailBand(low=1.0, high=1.0))
+)
+"""A criterion with its detail band set: the stored properties hold no pixel size."""
 
 
 @pytest.fixture(autouse=True)
@@ -81,6 +89,7 @@ def add_stigmator_af(add_action: Callable[..., Action]) -> Callable[..., Autofun
             linked_imaging="imaging",
             mode=StepModeSettings(
                 sweeping=CircularSweeping(radius=RADIUS, steps=4),
+                criterion=CustomCriterion(criterion=CRITERION),
             ),
             execution_frequency=ONCE,
             # leaves its stale working distance on the microscope before the refocus
@@ -106,6 +115,7 @@ def add_refocus(add_action: Callable[..., Action]) -> Callable[..., Refocus]:
                 sweeping=LinearSweeping(
                     target_attribute=target, range=(0.0, REFOCUS_STEP), steps=2
                 ),
+                criterion=CRITERION,
             ),
         )
         assert isinstance(action, Refocus)
@@ -196,6 +206,7 @@ def test_refocus_never_refocuses_an_attribute_the_run_sweeps(
             sweeping=LinearSweeping(
                 target_attribute="working_distance", range=(-1000.0, 1000.0), steps=3
             ),
+            criterion=CustomCriterion(criterion=CRITERION),
         ),
         execution_frequency=ONCE,
     )

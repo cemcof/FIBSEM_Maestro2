@@ -10,6 +10,7 @@ import numpy as np
 from scipy.ndimage import gaussian_filter
 
 from fibsem_maestro.core.registry import Registry
+from fibsem_maestro.criterion.error import CriterionError
 from fibsem_maestro.criterion.frc import frc_cutoff_frequency
 from fibsem_maestro.settings.criterion_settings import (
     SharpnessMetric,
@@ -18,12 +19,36 @@ from fibsem_maestro.settings.criterion_settings import (
 if TYPE_CHECKING:
     from numpy.typing import NDArray
 
+    from fibsem_maestro.core.detail_band import DetailBand
     from fibsem_maestro.core.image import Image
     from fibsem_maestro.logging.text.text_logger import TextLogger
     from fibsem_maestro.settings.criterion_settings import (
         DetailBandMetric,
         FrcMetric,
     )
+
+
+def _detail(metric: DetailBandMetric) -> DetailBand:
+    """
+    The metric's detail band, which must have been computed if it follows its default.
+
+    Args:
+        metric: The metric's settings, with their defaults computed
+            (`settings.dynamic_default.with_defaults`).
+
+    Returns:
+        The detail band, in nm.
+
+    Raises:
+        CriterionError: If the band still follows its default.
+    """
+    if metric.detail is None:
+        raise CriterionError(
+            "The detail band follows its default, which was not computed; "
+            "compute the defaults of the criterion's settings first."
+        )
+    return metric.detail
+
 
 CriterionFunction = Callable[["Image", SharpnessMetric, "TextLogger"], np.floating]
 """A metric: image, the metric's own settings variant, and a logger to a sharpness."""
@@ -47,8 +72,8 @@ def bandpass_criterion(
     Returns:
         np.floating: Mean of the absolute band-passed image.
     """
-    img_low = gauss_filter(img, img.pixel_size, metric.detail.low)
-    img_high = gauss_filter(img, img.pixel_size, metric.detail.high)
+    img_low = gauss_filter(img, img.pixel_size, _detail(metric).low)
+    img_high = gauss_filter(img, img.pixel_size, _detail(metric).high)
 
     return np.mean(abs(img_high - img_low))
 
@@ -68,8 +93,8 @@ def bandpass_var_criterion(
     Returns:
         np.floating: Variance of the band-passed image.
     """
-    img_low = gauss_filter(img, img.pixel_size, metric.detail.low)
-    img_high = gauss_filter(img, img.pixel_size, metric.detail.high)
+    img_low = gauss_filter(img, img.pixel_size, _detail(metric).low)
+    img_high = gauss_filter(img, img.pixel_size, _detail(metric).high)
 
     return np.var(img_high - img_low)
 
@@ -102,7 +127,7 @@ def fft_1d_criterion(
     freq = freq[freq > 0]
 
     # filter frequencies
-    low_frequency, high_frequency = metric.detail.to_frequency_range()
+    low_frequency, high_frequency = _detail(metric).to_frequency_range()
     band_i = np.where((freq < high_frequency) & (freq > low_frequency))[0]
 
     # sum of amplitudes of all filtered frequencies
@@ -140,7 +165,7 @@ def fft_2d_criterion(
     freq = np.sqrt(freq1**2 + freq2**2)
 
     # lowest and highest detail frequency
-    low_frequency, high_frequency = metric.detail.to_frequency_range()
+    low_frequency, high_frequency = _detail(metric).to_frequency_range()
 
     # make freq filter and filter frequency
     band_mask = (freq >= low_frequency) & (freq <= high_frequency)

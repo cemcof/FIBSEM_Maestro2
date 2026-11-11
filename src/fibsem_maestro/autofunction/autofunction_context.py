@@ -16,6 +16,7 @@ from fibsem_maestro.settings.autofunction_settings import (
 )
 from fibsem_maestro.settings.autofunction_settings import LineMode as LineModeSettings
 from fibsem_maestro.settings.autofunction_settings import StepMode as StepModeSettings
+from fibsem_maestro.settings.dynamic_default import with_defaults
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
     from fibsem_maestro.microscope.microscope import Microscope
     from fibsem_maestro.settings.autofunction_settings import AutofunctionMode
     from fibsem_maestro.settings.criterion_settings import CriterionSettings
+    from fibsem_maestro.settings.dynamic_default import DefaultContext
 
 
 class SweepSettingsLike(Protocol):
@@ -55,6 +57,7 @@ class AutofunctionContext:
         sweeping: Sweeping | None,
         settings: SweepSettingsLike,
         ctx: ActionContext,
+        defaults: DefaultContext,
     ):
         """
         Shared execution environment for autofunction mode implementations.
@@ -64,11 +67,14 @@ class AutofunctionContext:
             sweeping: Controller for sweeping the target beam attributes.
             settings: Settings of the action that sweeps.
             ctx: Context providing slice navigation and access logging and storage.
+            defaults: What the criterion's settings following their dynamic
+                defaults (the detail band) are computed from.
         """
         self.microscope = microscope
         self.sweeping = sweeping
         self.ctx = ctx
         self.settings = settings
+        self._defaults = defaults
 
         # the frame a line-mode sweep was evaluated on, kept for logging after the sweep
         self.line_focus_image: Image | None = None
@@ -100,9 +106,14 @@ class AutofunctionContext:
             A zero-argument callable that returns an `AutofunctionResult` when
             invoked, or raises an exception if sharpness calculation fails
             or if the criterion is not defined.
+
+        Raises:
+            DefaultUnavailableError: If a criterion setting follows a default
+                that cannot be computed (e.g. no pixel size is stored).
         """
         ctx_snapshot = contextvars.copy_context()
-        criterion_settings = self.criterion
+        # computed here, on the acquiring thread, from the properties stored now
+        criterion_settings = with_defaults(self.criterion, self._defaults)
         current_view = self.ctx.current_view
         text_logger = self.ctx.text_logger.at(current_view.slice_index)
         image_logger = self.ctx.image_logger.at(current_view.slice_index)

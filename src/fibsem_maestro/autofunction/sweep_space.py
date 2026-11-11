@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from fibsem_maestro.settings.dynamic_default import required_value
 from fibsem_maestro.settings.sweeping_settings import (
     CircularSweeping as CircularSweepingSettings,
 )
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from fibsem_maestro.autofunction.sweep_step import SweepDirection, SweepPoint
+    from fibsem_maestro.settings.dynamic_default import DefaultContext
     from fibsem_maestro.settings.sweeping_settings import SweepingSettings
 
 
@@ -231,20 +233,46 @@ class CircularSweepSpace(SweepSpace):
         return f"{self.angle_of(value, base):.0f}°"
 
 
-def make_sweep_space(settings: SweepingSettings) -> SweepSpace:
+def sweep_attributes(settings: SweepingSettings) -> tuple[str, ...]:
     """
-    Build the sweep space described by the sweeping settings.
+    The names of the attributes a sweep changes, without building its space.
 
     Args:
         settings: One- or two-dimensional sweeping settings.
 
     Returns:
+        One name per swept attribute, in the order of a sweep point's values.
+    """
+    match settings:
+        case LinearSweepingSettings():
+            return (settings.target_attribute,)
+        case CircularSweepingSettings():
+            return (settings.target_attribute_x, settings.target_attribute_y)
+
+
+def make_sweep_space(
+    settings: SweepingSettings, defaults: DefaultContext
+) -> SweepSpace:
+    """
+    Build the sweep space described by the sweeping settings.
+
+    Args:
+        settings: One- or two-dimensional sweeping settings.
+        defaults: What a range following its default is computed from.
+
+    Returns:
         The matching sweep space.
+
+    Raises:
+        DefaultUnavailableError: If the range follows a default that cannot
+            be computed.
     """
     match settings:
         case LinearSweepingSettings():
             return LinearSweepSpace(
-                settings.target_attribute, settings.range, settings.steps
+                settings.target_attribute,
+                required_value(settings, "range", defaults),
+                settings.steps,
             )
         case CircularSweepingSettings():
             return CircularSweepSpace(

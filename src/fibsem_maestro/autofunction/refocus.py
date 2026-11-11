@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from fibsem_maestro.core.area import RelativeArea
     from fibsem_maestro.core.beam_type import BeamType
     from fibsem_maestro.microscope.microscope import Microscope
+    from fibsem_maestro.properties.beam_properties import BeamProperties
     from fibsem_maestro.workflow.actions import Actions
 
 
@@ -112,12 +113,36 @@ class Refocus(Action[RefocusSettings, RefocusState]):
             return self._settings.mode.scanning_area[0]
         return None
 
+    def stored_beam_properties(self) -> BeamProperties | None:
+        """
+        The linked imaging's stored properties on its beam: the refocus stores none of its own.
+
+        Its dynamic defaults (the sweep range, the detail band) are computed
+        from them, since it refocuses under the imaging's properties.
+
+        Returns:
+            The imaging's stored beam properties, or None while no imaging is
+            linked or none are stored.
+        """
+        imaging = self._find_imaging()
+        return imaging.stored_beam_properties() if imaging is not None else None
+
     def preparation_issues(self) -> list[str]:
+        """
+        Report a missing or unsuitable imaging, a position that sees stale trial values,
+        and defaults that cannot be computed.
+
+        Returns:
+            Human-readable problems; empty if the refocus is ready.
+        """
+        return [*self._link_issues(), *self._default_issues()]
+
+    def _link_issues(self) -> list[str]:
         """
         Report a missing or unsuitable imaging, and a position that sees stale trial values.
 
         Returns:
-            Human-readable problems; empty if the refocus is ready.
+            Human-readable problems with the linked imaging.
         """
         name = self._settings.linked_imaging
         if not name:
@@ -252,7 +277,11 @@ class Refocus(Action[RefocusSettings, RefocusState]):
         """
         if self._runner is None:
             self._runner = SweepRunner(
-                self._microscope, self._settings, self._ctx, beam_type
+                self._microscope,
+                self._settings,
+                self._ctx,
+                beam_type,
+                self.default_context(),
             )
         else:
             self._runner.rebuild(beam_type)

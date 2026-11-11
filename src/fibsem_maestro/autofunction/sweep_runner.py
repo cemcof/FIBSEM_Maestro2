@@ -16,7 +16,7 @@ from fibsem_maestro.autofunction import AUTOFUNCTION_MODES, LineMode
 from fibsem_maestro.autofunction.af_chart import af_chart
 from fibsem_maestro.autofunction.autofunction_context import AutofunctionContext
 from fibsem_maestro.autofunction.jobs_manager import JobsManager
-from fibsem_maestro.autofunction.sweep_space import make_sweep_space
+from fibsem_maestro.autofunction.sweep_space import sweep_attributes
 from fibsem_maestro.autofunction.sweeping import Sweeping
 from fibsem_maestro.core.beam_type import BeamType
 from fibsem_maestro.core.point import PixelPoint
@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from fibsem_maestro.imaging.imaging import Imaging
     from fibsem_maestro.microscope.microscope import Microscope
     from fibsem_maestro.settings.autofunction_settings import AutofunctionMode
+    from fibsem_maestro.settings.dynamic_default import DefaultContext
 
 # another sweep follows only if the best value moved within this angle of the
 # previous move's direction (2D); in 1D the directions are +-1, so it only
@@ -79,6 +80,8 @@ class SweepRunner:
         settings: The settings of the owning action; read on every `rebuild`.
         ctx: The owning action's context, for logging.
         beam_type: The beam whose attributes are swept.
+        defaults: What the settings following their dynamic defaults
+            are computed from: the owning action's `default_context()`.
     """
 
     def __init__(
@@ -87,10 +90,12 @@ class SweepRunner:
         settings: SweepSettingsLike,
         ctx: ActionContext,
         beam_type: BeamType,
+        defaults: DefaultContext,
     ) -> None:
         self._microscope = microscope
         self._settings = settings
         self._ctx = ctx
+        self._defaults = defaults
 
         # the pool is sized from max_workers; reset_jobs resizes it between sweeps
         self._executor_workers = settings.max_workers
@@ -125,6 +130,7 @@ class SweepRunner:
                 else self._microscope.ion_beam,
                 self._settings.mode.sweeping,
                 self._ctx.text_logger.derive("sweeping"),
+                self._defaults,
             )
 
         self._autofunction_ctx = AutofunctionContext(
@@ -132,6 +138,7 @@ class SweepRunner:
             self._sweeping,
             self._settings,
             self._ctx,
+            self._defaults,
         )
 
     @property
@@ -471,7 +478,7 @@ def swept_attributes(mode: AutofunctionMode) -> tuple[str, ...]:
     """
     if isinstance(mode, AutoscriptFunctionBase):
         return ()
-    return make_sweep_space(mode.sweeping).attributes
+    return sweep_attributes(mode.sweeping)
 
 
 def _get_line_index(result: AutofunctionResult) -> int:

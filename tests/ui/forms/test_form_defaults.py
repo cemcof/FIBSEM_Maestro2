@@ -13,6 +13,7 @@ from pydantic import Field
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import QDoubleSpinBox, QLineEdit, QScrollArea, QWidget
 
+from fibsem_maestro.action.defaults import ActionDefaults
 from fibsem_maestro.core.direction import Direction
 from fibsem_maestro.settings.base_settings import BaseSettings
 from fibsem_maestro.settings.dynamic_default import DynamicDefault, effective_value
@@ -29,7 +30,7 @@ if TYPE_CHECKING:
     from PyQt6.QtWidgets import QMenu
     from pytestqt.qtbot import QtBot
 
-    from fibsem_maestro.settings.dynamic_default import SettingsLookup
+    from fibsem_maestro.settings.dynamic_default import DefaultContext
     from fibsem_maestro.ui.forms.builder import Form, FormBuilder
     from fibsem_maestro.ui.forms.context import FormContext
 
@@ -37,8 +38,8 @@ UNAVAILABLE = "Set a positive base."
 SOURCE = "the base"
 
 
-def _doubled_base(settings: Defaults, lookup: SettingsLookup) -> float | None:
-    _ = lookup
+def _doubled_base(settings: Defaults, context: DefaultContext) -> float | None:
+    _ = context
     return settings.base * 2 if settings.base > 0 else None
 
 
@@ -111,7 +112,10 @@ def test_dynamic_default_is_shown_marked_auto_but_not_stored(
 
     assert spin_of(form, "doubled").value() == 6.0
     assert settings.doubled is None
-    assert effective_value(settings, "doubled", lambda _: None) == 6.0
+    assert (
+        effective_value(settings, "doubled", ActionDefaults(None, (), lambda: None))
+        == 6.0
+    )
     assert auto_shown(form)
     assert SOURCE in dynamic(form).auto_mark.toolTip()
     assert commits == []
