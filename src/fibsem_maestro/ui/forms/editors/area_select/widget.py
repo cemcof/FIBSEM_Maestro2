@@ -299,7 +299,16 @@ class AreaSelectWidget(QWidget, FieldEditor[list[RelativeArea]]):
 
     def _toggle(self) -> None:
         """Toggle between the collapsed thumbnail and the expanded viewer."""
-        self._expanded = not self._expanded
+        self._set_expanded(not self._expanded)
+
+    def _set_expanded(self, expanded: bool) -> None:
+        """
+        Show the expanded viewer or the collapsed thumbnail.
+
+        Args:
+            expanded: True for the viewer, False for the thumbnail.
+        """
+        self._expanded = expanded
         self._thumbnail_label.setVisible(not self._expanded)
         self._viewer_container.setVisible(self._expanded)
         self._toggle_btn.setText("▲ Collapse" if self._expanded else "▼ Expand")
@@ -308,7 +317,9 @@ class AreaSelectWidget(QWidget, FieldEditor[list[RelativeArea]]):
             self._update_thumbnail()
 
     def _load_image(self) -> None:
-        """Request a preview image; it is shown when the preview port delivers it."""
+        """Expand the viewer and request a preview image; it is shown when the preview port delivers it."""
+        # the image is loaded to draw on it
+        self._set_expanded(True)
         if self._previews is None:
             self._status_label.setText(f"Acquisition failed: {_NOT_CONNECTED}")
             return

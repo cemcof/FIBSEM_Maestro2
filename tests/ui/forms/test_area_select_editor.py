@@ -132,6 +132,21 @@ def test_load_without_preview_port_reports_not_connected(
     assert button(area, "Load").isEnabled()
 
 
+@pytest.mark.parametrize("expanded_before", [False, True])
+def test_load_expands_the_selector(
+    area_of: Callable[..., tuple[Form, FieldEditor[Any]]],
+    expanded_before: bool,
+) -> None:
+    _, area = area_of(PreviewSettings())
+    if expanded_before:
+        button(area, "▼ Expand").click()
+
+    _load(area)
+
+    # never collapses: the image is loaded to draw on it
+    assert button(area, "▲ Collapse").isVisibleTo(_widget(area))
+
+
 def test_load_requests_the_beam_offset_and_crop_of_the_live_settings(
     area_of: Callable[..., tuple[Form, FieldEditor[Any]]], previews: FakePreviews
 ) -> None:
@@ -346,14 +361,13 @@ def test_detached_area_selector_warns_that_its_context_cannot_be_resolved(
 def _expanded_viewer(
     qtbot: QtBot, area: FieldEditor[Any], previews: FakePreviews
 ) -> QGraphicsView:
-    """Load an image into the area selector, expand it and return its viewer."""
+    """Load an image into the area selector, which expands it, and return its viewer."""
     widget = _widget(area)
     window = widget.window()
     assert window is not None
     window.show()
     _load(area)
     previews.handles[-1].succeeded.emit(_image(400, 300))
-    button(widget, "▼ Expand").click()
     viewer = widget.findChild(QGraphicsView)
     assert isinstance(viewer, QGraphicsView)
     qtbot.waitUntil(viewer.isVisible)
