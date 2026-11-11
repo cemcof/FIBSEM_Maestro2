@@ -27,7 +27,7 @@ S = AppState
 
 def spec_table(state: AppState, danger: bool, busy: bool) -> Permissions:
     """The permission table of the specification, written out independently."""
-    not_running = state not in (S.RUNNING, S.STOPPING)
+    not_running = state not in (S.RUNNING, S.STOPPING, S.SKIPPING)
     return Permissions(
         structure_editable=not_running and state is not S.INTERRUPTED and not busy,
         settings_editable=not_running or danger,
@@ -40,6 +40,8 @@ def spec_table(state: AppState, danger: bool, busy: bool) -> Permissions:
         reset_enabled=not_running and not busy,
         microscope_settings_editable=not_running or danger,
         error_choice_enabled=state is S.INTERRUPTED and not busy,
+        slice_skip_enabled=state is S.RUNNING
+        or (state in (S.PAUSED, S.RELOADED, S.INTERRUPTED) and not busy),
         task_busy=busy,
     )
 

@@ -1,20 +1,12 @@
 # Released under GPL-3.0 License.
 # Copyright (c) 2024-2026 CEMCOF
 
-"""
-`RunController`: the run state machine on real short runs.
-
-The runs execute two adjust-props actions on the simulated microscope. A run is
-bounded by lowering `Workflow.MAX_SLICE`; an action error is produced by storing
-props the microscope refuses to apply (`store_unappliable_props`).
-"""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 import pytest
-from gui_testkit.app import wait_for_state
+from gui_testkit.app import stop_run, wait_for_state
 from gui_testkit.situations import busy_tasks, store_unappliable_props
 
 from fibsem_maestro.ui.app.errors import NotAllowedError
@@ -29,6 +21,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from gui_testkit.app import Services
+    from gui_testkit.situations import HeldStep
     from pytestqt.qtbot import QtBot
 
     from fibsem_maestro.action.action import Action
@@ -271,8 +264,13 @@ def test_run_workflow_error_ends_the_run(
 
 @pytest.mark.parametrize(
     "call",
-    [RunController.pause, RunController.resume, RunController.skip_and_pause],
-    ids=["pause", "resume", "skip_and_pause"],
+    [
+        RunController.pause,
+        RunController.resume,
+        RunController.skip_and_pause,
+        RunController.skip_slice,
+    ],
+    ids=["pause", "resume", "skip_and_pause", "skip_slice"],
 )
 def test_run_refuses_calls_while_editing(
     services: Services, call: Callable[[RunController], None]
@@ -429,3 +427,149 @@ def test_run_ignores_late_signal_of_aborted_run(
 
     wait_for_state(qtbot, run, AppState.FINISHED)
     assert [action.ctx.slice for action in actions] == [4, 4]
+
+
+def held_in_first(
+    qtbot: QtBot, run: RunController, hold: Callable[..., HeldStep], action: Action
+) -> HeldStep:
+    """Start a run and return once `action`, the first, executes its held step."""
+    held = hold(action)
+    run.start()
+    qtbot.waitUntil(held.entered.is_set, timeout=TIMEOUT_MS)
+    return held
+
+
+def test_run_skip_slice_while_running_waits_for_the_current_action(
+    qtbot: QtBot,
+    services: Services,
+    actions: tuple[Action, Action],
+    hold: Callable[..., HeldStep],
+) -> None:
+    run = services.run
+    first, second = actions
+    entered = states(run)
+    held = held_in_first(qtbot, run, hold, first)
+
+    run.skip_slice()
+
+    assert run.state is AppState.SKIPPING
+    assert run.state.is_running and services.tasks.locked
+    with qtbot.waitSignal(run.slice_skipped, timeout=TIMEOUT_MS) as blocker:
+        held.release.set()
+    assert blocker.args == [[second]]
+    assert run.state is AppState.RUNNING
+    assert entered[:3] == [AppState.RUNNING, AppState.SKIPPING, AppState.RUNNING]
+
+
+def test_run_skip_slice_while_paused_skips_and_resumes(
+    qtbot: QtBot,
+    services: Services,
+    actions: tuple[Action, Action],
+    hold: Callable[..., HeldStep],
+) -> None:
+    run = services.run
+    first, second = actions
+    held = held_in_first(qtbot, run, hold, first)
+    run.pause()
+    held.release.set()
+    wait_for_state(qtbot, run, AppState.PAUSED)
+    assert (first.ctx.slice, second.ctx.slice) == (2, 1)
+
+    with qtbot.waitSignal(run.slice_skipped, timeout=TIMEOUT_MS) as blocker:
+        run.skip_slice()
+        assert run.state is AppState.SKIPPING
+    assert blocker.args == [[second]]
+    assert run.state is AppState.RUNNING
+
+
+def test_run_pause_while_skipping_pauses_before_the_next_slice(
+    qtbot: QtBot,
+    services: Services,
+    session: WorkflowSession,
+    actions: tuple[Action, Action],
+    hold: Callable[..., HeldStep],
+) -> None:
+    run = services.run
+    held = held_in_first(qtbot, run, hold, actions[0])
+    run.skip_slice()
+
+    run.pause()
+    assert run.state is AppState.STOPPING
+    held.release.set()
+
+    wait_for_state(qtbot, run, AppState.PAUSED)
+    # the skip went first; nothing of the next slice ran
+    assert session.slice == 2
+    assert [action.ctx.slice for action in actions] == [2, 2]
+
+
+def test_run_skip_slice_after_an_error_skips_the_failed_action_with_the_rest(
+    qtbot: QtBot,
+    services: Services,
+    actions: tuple[Action, Action],
+    last_slice: Callable[[int], None],
+) -> None:
+    run = services.run
+    first, second = actions
+    last_slice(1)
+    interrupt(qtbot, run, first)
+
+    with qtbot.waitSignal(run.slice_skipped, timeout=TIMEOUT_MS) as blocker:
+        run.skip_slice()
+        assert run.state is AppState.SKIPPING
+    # the failed action was skipped as with Skip, then the rest
+    assert blocker.args == [[second]]
+    wait_for_state(qtbot, run, AppState.FINISHED)
+    assert [action.ctx.slice for action in actions] == [2, 2]
+
+
+def test_run_skip_requested_before_an_error_is_still_pending_after_the_choice(
+    qtbot: QtBot,
+    services: Services,
+    actions: tuple[Action, Action],
+    hold: Callable[..., HeldStep],
+) -> None:
+    run = services.run
+    first, second = actions
+    held = hold(first, fail=True)
+    run.start()
+    qtbot.waitUntil(held.entered.is_set, timeout=TIMEOUT_MS)
+    run.skip_slice()
+    with qtbot.waitSignal(run.action_failed, timeout=TIMEOUT_MS):
+        held.release.set()
+
+    with qtbot.waitSignal(run.slice_skipped, timeout=TIMEOUT_MS) as blocker:
+        run.choose(ErrorChoice.RETRY)
+        assert run.state is AppState.SKIPPING
+    assert blocker.args == [[second]]
+    assert run.state is AppState.RUNNING
+
+
+def test_run_skip_slice_after_a_reload_starts_the_run(
+    qtbot: QtBot,
+    services: Services,
+    session: WorkflowSession,
+    actions: tuple[Action, Action],
+    hold: Callable[..., HeldStep],
+    last_slice: Callable[[int], None],
+) -> None:
+    first, second = actions
+    # stopped mid-slice, then the application restarted
+    held = held_in_first(qtbot, services.run, hold, first)
+    services.run.pause()
+    held.release.set()
+    wait_for_state(qtbot, services.run, AppState.PAUSED)
+    services.run.abort()
+    reloaded = RunController(session, services.tasks)
+    assert reloaded.state is AppState.RELOADED
+    last_slice(1)
+
+    try:
+        with qtbot.waitSignal(reloaded.slice_skipped, timeout=TIMEOUT_MS) as blocker:
+            reloaded.skip_slice()
+            assert reloaded.state is AppState.SKIPPING
+        assert blocker.args == [[second]]
+        wait_for_state(qtbot, reloaded, AppState.FINISHED)
+        assert [action.ctx.slice for action in actions] == [2, 2]
+    finally:
+        stop_run(qtbot, reloaded)

@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from gui_testkit.app import Services
+    from gui_testkit.situations import HeldStep
     from pytestqt.qtbot import QtBot
 
     from fibsem_maestro.action.action import Action
@@ -264,6 +265,41 @@ def test_commands_run_pressed_starts_pauses_and_resumes(
     services.validity.set_has_errors(prepared[0], False)
     commands.run_pressed()
     assert run.state is AppState.RUNNING
+
+
+def test_commands_skip_slice_refused_with_nothing_to_skip(
+    services: Services, prepared: tuple[Action, Action]
+) -> None:
+    with pytest.raises(NotAllowedError):
+        services.commands.skip_slice()
+    assert services.run.state is AppState.EDITING
+    assert [action.ctx.slice for action in prepared] == [0, 0]
+
+
+def test_commands_skip_slice_from_paused_needs_a_ready_workflow(
+    qtbot: QtBot,
+    services: Services,
+    prepared: tuple[Action, Action],
+    hold: Callable[..., HeldStep],
+) -> None:
+    commands, run = services.commands, services.run
+    held = hold(prepared[0])
+    commands.run_pressed()
+    qtbot.waitUntil(held.entered.is_set, timeout=TIMEOUT_MS)
+    commands.run_pressed()
+    held.release.set()
+    wait_for_state(qtbot, run, AppState.PAUSED)
+
+    # skipping resumes the run, as the run button would
+    services.validity.set_has_errors(prepared[0], True)
+    with pytest.raises(NotAllowedError):
+        commands.skip_slice()
+    assert run.state is AppState.PAUSED
+
+    services.validity.set_has_errors(prepared[0], False)
+    commands.skip_slice()
+    assert run.state is AppState.SKIPPING
+    wait_for_state(qtbot, run, AppState.RUNNING)
 
 
 def test_commands_error_choice_resumes_interrupted_run(

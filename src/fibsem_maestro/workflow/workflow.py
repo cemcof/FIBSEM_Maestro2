@@ -21,6 +21,8 @@ from fibsem_maestro.workflow.error_choice import ErrorChoice
 from fibsem_maestro.workflow.propagations import PropagationRule, Propagations
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from fibsem_maestro.action.action import Action
     from fibsem_maestro.action_context.action_context import ActionContext
     from fibsem_maestro.notifications.notification_service import NotificationService
@@ -40,6 +42,19 @@ class WorkflowCallbacks(Protocol):
     def is_pause_requested(self) -> bool: ...
     def wait_for_resume(self) -> None: ...
     def request_error_choice(self, error: ActionError) -> ErrorChoice: ...
+
+    def is_slice_skip_requested(self) -> bool:
+        """Whether the user asked to skip the rest of the current slice."""
+        ...
+
+    def notify_slice_skipped(self, skipped: Sequence[Action]) -> None:
+        """
+        Announce that a requested skip of the rest of the slice is done.
+
+        Args:
+            skipped: The actions skipped; empty if none was left to skip.
+        """
+        ...
 
 
 class Workflow:
@@ -275,6 +290,8 @@ class Workflow:
                         )
                         raise WorkflowError(e) from e
 
+            # a pause requested while a slice was skipped waits for the next slice
+            pause_first = False
             while self.ctx.slice <= min(last_slice, self.MAX_SLICE):
                 # completion is checked only between slices, so a slice that has
                 # started (e.g. the one that used up the milling area) always ends
@@ -283,70 +300,63 @@ class Workflow:
                         "Workflow finished: " + "; ".join(reasons)
                     )
                     return
-                self._run_slice()
+                pause_first = self._run_slice(pause_first)
 
-    def _run_slice(self) -> None:
-        """Executes all actions for a single slice and performs synchronization."""
+    def _run_slice(self, pause_first: bool = False) -> bool:
+        """
+        Executes all actions for a single slice and performs synchronization.
+
+        A skip of the rest of the slice requested by the user is honoured
+        before the next action starts, once some action of the slice has run
+        (`WorkflowCallbacks.is_slice_skip_requested`). It takes precedence over
+        a pause requested at the same time, which then takes effect at the
+        start of the next slice.
+
+        Args:
+            pause_first: Pause, if requested, before any action of the slice
+                runs; for a pause requested while the previous slice was skipped.
+
+        Returns:
+            True if a skip of the rest of the slice was requested and done.
+        """
 
         self.ctx.text_logger.info(f"Starting slice {self.ctx.slice}.")
         # sleep for 1 ms to avoid overlapping slice log messages
         sleep(0.001)
+
+        if pause_first:
+            self._pause_if_requested()
 
         # check for issues with action preparation
         issues = self.preparation_issues()
         if issues:
             raise WorkflowError("Actions are not ready to run:\n" + "\n".join(issues))
 
+        skipped = False
         while (action := self.next_pending_action()) is not None:
+            # requested before any action of the slice ran (e.g. while the run
+            # started), the first action still runs: a skip never empties a slice
+            if self._slice_skip_requested() and self.slice_started():
+                self._skip_rest_of_slice()
+                skipped = True
+                break
+
             # execute the action
             outcome = self._execute_with_recovery(action)
+            self._finish_step(action, outcome)
 
-            # store the state and the current settings of the action
-            action.ctx.state_store.next.write("state.yaml", action.state)
-            action.ctx.settings_store.next.write("settings.yaml", action.settings)
+            # a skip requested meanwhile goes first; a pause then waits for the next slice
+            if not self._slice_skip_requested():
+                self._pause_if_requested()
+            self._notify_action_finished(action)
 
-            # propagate properties to other actions, if the action was executed
-            if isinstance(outcome, Produced):
-                self.propagations.propagate(
-                    action, outcome.props, self.actions, self.ctx.text_logger
-                )
-                # explicit patches go last, so they win over rule-based propagation
-                self.propagations.apply_patches(
-                    outcome.patches, self.actions, self.ctx.text_logger
-                )
-
-            # advance the slice counter for the action
-            self.ctx.text_logger.debug(
-                f"Advancing slice counter for action '{action.name}'."
+        if self._slice_skip_requested() and self.callbacks:
+            # requested while the last action of the slice executed
+            self.ctx.text_logger.info(
+                f"No action of slice {self.ctx.slice} is left to skip."
             )
-            action.ctx.advance()
-
-            # the loop terminates only when no action is pending, so a counter that
-            # fails to advance would spin forever
-            if action.ctx.slice <= self.ctx.slice:
-                raise WorkflowError(
-                    f"Action '{action.name}' did not advance its slice counter past "
-                    f"{self.ctx.slice}; refusing to loop."
-                )
-
-            if self.callbacks and self.callbacks.is_pause_requested():
-                # all actions should wait for their background threads to finish
-                for pending in self.actions:
-                    pending.wait_for_background_threads()
-                # then we notify that the workflow is actually paused
-                self.callbacks.notify_is_paused()
-                # and wait for the resume signal
-                self.callbacks.wait_for_resume()
-
-            if self.callbacks:
-                # find the index of the action in the workflow list
-                index = next(
-                    (i for i, a in enumerate(self.actions) if a is action), None
-                )
-                # the action may have been already removed from the workflow
-                # in which case we do not notify
-                if index is not None:
-                    self.callbacks.notify_action_finished(index)
+            self.callbacks.notify_slice_skipped([])
+            skipped = True
 
         # at the end of each slice, increment the workflow slice counter
         self.ctx.advance()
@@ -364,6 +374,96 @@ class Workflow:
 
         if self.callbacks:
             self.callbacks.notify_slice_finished()
+        return skipped
+
+    def _finish_step(self, action: Action, outcome: StepOutcome) -> None:
+        """
+        Store what an action's step left behind and advance the action to the next slice.
+
+        Args:
+            action: The action that has just executed or been skipped.
+            outcome: Its outcome; only `Produced` properties are propagated.
+
+        Raises:
+            WorkflowError: If the action's slice counter did not advance past
+                the workflow's.
+        """
+        # store the state and the current settings of the action
+        action.ctx.state_store.next.write("state.yaml", action.state)
+        action.ctx.settings_store.next.write("settings.yaml", action.settings)
+
+        # propagate properties to other actions, if the action was executed
+        if isinstance(outcome, Produced):
+            self.propagations.propagate(
+                action, outcome.props, self.actions, self.ctx.text_logger
+            )
+            # explicit patches go last, so they win over rule-based propagation
+            self.propagations.apply_patches(
+                outcome.patches, self.actions, self.ctx.text_logger
+            )
+
+        # advance the slice counter for the action
+        self.ctx.text_logger.debug(
+            f"Advancing slice counter for action '{action.name}'."
+        )
+        action.ctx.advance()
+
+        # the loop terminates only when no action is pending, so a counter that
+        # fails to advance would spin forever
+        if action.ctx.slice <= self.ctx.slice:
+            raise WorkflowError(
+                f"Action '{action.name}' did not advance its slice counter past "
+                f"{self.ctx.slice}; refusing to loop."
+            )
+
+    def _slice_skip_requested(self) -> bool:
+        """Whether the user asked to skip the rest of the current slice."""
+        return self.callbacks is not None and self.callbacks.is_slice_skip_requested()
+
+    def _skip_rest_of_slice(self) -> None:
+        """
+        Skip every action not yet run for the current slice, carrying its properties over.
+
+        The skipped actions and the warnings about skipping them
+        (`skip_warnings`) are logged.
+        """
+        skipped = self.pending_actions()
+        self.ctx.text_logger.warning(
+            f"Skipping the rest of slice {self.ctx.slice} at the user's request: "
+            + ", ".join(f"'{action.name}'" for action in skipped)
+            + "."
+        )
+        for warning in self.skip_warnings(skipped):
+            self.ctx.text_logger.warning(warning)
+
+        for action in skipped:
+            outcome = action.skip("skipped with the rest of the slice by the user")
+            self._finish_step(action, outcome)
+            self._notify_action_finished(action)
+
+        if self.callbacks:
+            self.callbacks.notify_slice_skipped(skipped)
+
+    def _pause_if_requested(self) -> None:
+        """Pause, if the user asked to, once the actions' background threads are done."""
+        if self.callbacks and self.callbacks.is_pause_requested():
+            # all actions should wait for their background threads to finish
+            for pending in self.actions:
+                pending.wait_for_background_threads()
+            # then we notify that the workflow is actually paused
+            self.callbacks.notify_is_paused()
+            # and wait for the resume signal
+            self.callbacks.wait_for_resume()
+
+    def _notify_action_finished(self, action: Action) -> None:
+        """Announce an action that has just finished, unless it was removed from the workflow."""
+        if self.callbacks:
+            # find the index of the action in the workflow list
+            index = next((i for i, a in enumerate(self.actions) if a is action), None)
+            # the action may have been already removed from the workflow
+            # in which case we do not notify
+            if index is not None:
+                self.callbacks.notify_action_finished(index)
 
     def preparation_issues(self) -> list[str]:
         """
@@ -407,6 +507,42 @@ class Workflow:
             f"'{action.name}': {reason}"
             for action in self.actions
             if (reason := action.completion_reason()) is not None
+        ]
+
+    def pending_actions(self) -> list[Action]:
+        """
+        The actions that have not yet run for the current slice.
+
+        Returns:
+            The actions whose slice counter has not advanced past the
+            workflow's, in workflow order.
+        """
+        return [action for action in self.actions if action.ctx.slice <= self.ctx.slice]
+
+    def slice_started(self) -> bool:
+        """
+        Whether some action has already run (or been skipped) for the current slice.
+
+        Returns:
+            True if an action's slice counter is past the workflow's.
+        """
+        return any(action.ctx.slice > self.ctx.slice for action in self.actions)
+
+    def skip_warnings(self, skipped: Sequence[Action]) -> list[str]:
+        """
+        Why skipping some actions for the current slice deserves a warning.
+
+        Args:
+            skipped: The actions to skip.
+
+        Returns:
+            One `"'<action name>': <warning>"` line per skipped action
+            warning about it (`Action.skip_warning`); empty if none does.
+        """
+        return [
+            f"'{action.name}': {warning}"
+            for action in skipped
+            if (warning := action.skip_warning(skipped)) is not None
         ]
 
     def next_pending_action(self) -> Action | None:

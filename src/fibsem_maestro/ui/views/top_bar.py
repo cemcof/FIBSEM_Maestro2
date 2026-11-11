@@ -32,6 +32,7 @@ from fibsem_maestro.ui.views.connection import workflow_directory
 from fibsem_maestro.ui.views.dialogs.microscope_settings import (
     MicroscopeSettingsDialog,
 )
+from fibsem_maestro.ui.views.dialogs.slice_skip import confirm_slice_skip
 from fibsem_maestro.ui.widgets.icon_button import IconButton
 from fibsem_maestro.ui.widgets.icons import ICON_PAUSE, ICON_PLAY, ICON_SKULL, svg_icon
 
@@ -51,14 +52,38 @@ TASK_RUNNING_REASON = "A microscope task is running."
 WAITING_FOR_CHOICE_TOOLTIP = "Waiting for a choice in the error dialog."
 """Run tooltip in INTERRUPTED."""
 
+SKIP_TOOLTIP = (
+    "Skip the actions of the current slice that have not run yet and continue "
+    "with the next slice. An action executing finishes first."
+)
+"""Tooltip of the skip button while it is enabled."""
+
+SKIP_STATE_REASON = (
+    "Possible while the workflow runs, is paused or reloaded, or waits for a "
+    "choice after an error."
+)
+"""Skip-tooltip line in the states that do not allow skipping."""
+
+SKIP_NOTHING_REASON = (
+    "Nothing to skip: no action of the current slice has run yet, or none is left."
+)
+"""Skip-tooltip line when the workflow has nothing to skip."""
+
 _STATE_COLORS: dict[AppState, str] = {
     AppState.EDITING: "#f0c040",
     AppState.RUNNING: "#4caf50",
+    AppState.SKIPPING: "#ab47bc",
     AppState.PAUSED: "#9e9e9e",
     AppState.RELOADED: "#9e9e9e",
     AppState.INTERRUPTED: "#f44336",
     AppState.FINISHED: "#3734eb",
 }
+
+_BLINKING: dict[AppState, AppState] = {
+    AppState.STOPPING: AppState.PAUSED,
+    AppState.SKIPPING: AppState.SKIPPING,
+}
+"""The states that blink, alternating the running colour with that of the given state."""
 
 _RUN_ICON_SIZE = 20  # px
 
@@ -78,6 +103,8 @@ class TopBarViewData:
         new_enabled: Whether "New workflow" is enabled.
         import_enabled: Whether "Import workflow" is enabled.
         reset_enabled: Whether "Reset workflow" is enabled.
+        skip_enabled: Whether "Skip rest of slice" is enabled.
+        skip_tooltip: Tooltip of "Skip rest of slice".
     """
 
     slice_text: str
@@ -89,6 +116,8 @@ class TopBarViewData:
     new_enabled: bool
     import_enabled: bool
     reset_enabled: bool
+    skip_enabled: bool = False
+    skip_tooltip: str = ""
 
 
 def top_bar_view(
@@ -97,6 +126,7 @@ def top_bar_view(
     readiness: ReadinessReport,
     permissions: Permissions,
     frame: int,
+    skip_planned: bool = False,
 ) -> TopBarViewData:
     """
     Decide what the top bar shows.
@@ -106,13 +136,15 @@ def top_bar_view(
         slice_index: The workflow's slice counter.
         readiness: Why the workflow cannot run, if it cannot.
         permissions: The current permissions (incl. whether a task runs).
-        frame: The animation tick counter; STOPPING blinks on odd frames.
+        frame: The animation tick counter; STOPPING and SKIPPING blink on odd frames.
+        skip_planned: Whether the workflow has something to skip
+            (`RunController.planned_slice_skip`).
 
     Returns:
         The view data.
     """
-    if state is AppState.STOPPING:
-        color = "#4caf50" if frame % 2 == 0 else "#9e9e9e"
+    if (other := _BLINKING.get(state)) is not None:
+        color = _STATE_COLORS[AppState.RUNNING if frame % 2 == 0 else other]
     else:
         color = _STATE_COLORS[state]
 
@@ -123,7 +155,7 @@ def top_bar_view(
         case AppState.STOPPING:
             # the pause is on its way; leave the button as it is
             run_icon, run_enabled, run_tooltip = None, None, None
-        case AppState.RUNNING:
+        case AppState.RUNNING | AppState.SKIPPING:
             run_icon, run_enabled, run_tooltip = "pause", True, ""
         case AppState.INTERRUPTED:
             run_icon, run_enabled = "play", False
@@ -142,6 +174,9 @@ def top_bar_view(
                 )
                 run_tooltip = readiness_tooltip(reasons, heading)
 
+    skip_enabled, skip_tooltip = _skip_button(
+        state, readiness, permissions, skip_planned
+    )
     return TopBarViewData(
         slice_text=str(slice_index),
         state_text=str(state),
@@ -152,7 +187,47 @@ def top_bar_view(
         new_enabled=permissions.new_enabled,
         import_enabled=permissions.import_enabled,
         reset_enabled=permissions.reset_enabled,
+        skip_enabled=skip_enabled,
+        skip_tooltip=skip_tooltip,
     )
+
+
+def _skip_button(
+    state: AppState,
+    readiness: ReadinessReport,
+    permissions: Permissions,
+    skip_planned: bool,
+) -> tuple[bool, str]:
+    """
+    Whether "Skip rest of slice" is enabled, and its tooltip.
+
+    Args:
+        state: The run state.
+        readiness: Why the workflow cannot run; a paused or reloaded workflow
+            resumes or starts running when skipping.
+        permissions: The current permissions.
+        skip_planned: Whether the workflow has something to skip.
+
+    Returns:
+        Whether it is enabled; the tooltip, listing the reasons if it is not.
+    """
+    reasons: tuple[str, ...]
+    if not permissions.slice_skip_enabled:
+        reasons = (
+            (TASK_RUNNING_REASON,)
+            if permissions.task_busy and not state.is_running
+            else (SKIP_STATE_REASON,)
+        )
+    elif not skip_planned:
+        reasons = (SKIP_NOTHING_REASON,)
+    elif state in (AppState.PAUSED, AppState.RELOADED):
+        reasons = readiness.reasons
+    else:
+        reasons = ()
+
+    if reasons:
+        return False, readiness_tooltip(reasons, "Cannot skip:")
+    return True, SKIP_TOOLTIP
 
 
 class _RunButton(QPushButton):
@@ -275,6 +350,10 @@ class TopBar(QWidget):
         self._run_btn.clicked.connect(self._on_run)
         layout.addWidget(self._run_btn)
 
+        self._skip_btn = QPushButton("Skip rest of slice")
+        self._skip_btn.clicked.connect(self._on_skip_slice)
+        layout.addWidget(self._skip_btn)
+
         status_layout = QHBoxLayout()
         status_layout.setSpacing(1)
         status_layout.setContentsMargins(0, 0, 0, 0)
@@ -329,7 +408,7 @@ class TopBar(QWidget):
         self._danger_mode_btn.toggled.connect(self._on_danger_toggled)
         layout.addWidget(self._danger_mode_btn)
 
-        # blinks the STOPPING state
+        # blinks the STOPPING and SKIPPING states
         self._animation_timer = QTimer(self)
         self._animation_timer.setInterval(500)
         self._animation_timer.timeout.connect(self._on_animation_tick)
@@ -337,6 +416,10 @@ class TopBar(QWidget):
 
         run.state_changed.connect(self._refresh)
         run.slice_finished.connect(self._refresh)
+        # what is left to skip changes with every action, and with the structure
+        run.action_finished.connect(self._refresh)
+        session.structure_changed.connect(self._refresh)
+        session.workflow_reset.connect(self._refresh)
         readiness.changed.connect(self._refresh)
         policy.changed.connect(self._refresh)
         policy.danger_mode_changed.connect(self._on_danger_mode_changed)
@@ -349,6 +432,11 @@ class TopBar(QWidget):
     def run_button(self) -> QPushButton:
         """The run / pause button."""
         return self._run_btn
+
+    @property
+    def skip_button(self) -> QPushButton:
+        """The "Skip rest of slice" button."""
+        return self._skip_btn
 
     @property
     def new_button(self) -> QPushButton:
@@ -393,6 +481,7 @@ class TopBar(QWidget):
             self._readiness.report,
             self._policy.permissions,
             self._animation_frame,
+            skip_planned=self._run.planned_slice_skip() is not None,
         )
 
     def _refresh(self, *_: object) -> None:
@@ -416,6 +505,8 @@ class TopBar(QWidget):
         self._new_btn.setEnabled(data.new_enabled)
         self._import_btn.setEnabled(data.import_enabled)
         self._reset_btn.setEnabled(data.reset_enabled)
+        self._skip_btn.setEnabled(data.skip_enabled)
+        self._skip_btn.setToolTip(data.skip_tooltip)
 
     def _on_animation_tick(self) -> None:
         """Advance the animation frame and re-render."""
@@ -491,6 +582,18 @@ class TopBar(QWidget):
             # readiness or a task changed since the button was enabled; the
             # button follows on the next refresh
             self._refresh()
+
+    def _on_skip_slice(self) -> None:
+        plan = self._run.planned_slice_skip()
+        if plan is None or not confirm_slice_skip(self, plan):
+            self._refresh()
+            return
+        try:
+            self._commands.skip_slice()
+        except NotAllowedError as e:
+            # the run moved on while the user decided (e.g. the slice ended)
+            QMessageBox.information(self, "Not skipped", str(e))
+        self._refresh()
 
     def _on_danger_toggled(self, enabled: bool) -> None:
         self._commands.set_danger_mode(enabled)

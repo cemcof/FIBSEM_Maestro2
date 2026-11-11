@@ -558,3 +558,47 @@ def test_default_correction_used_is_logged(
     assert any(mentions(m, "wd_correction", f"{wd:.3g}", "nm") for m in debug)
     # set by the user: not a default
     assert not any(mentions(m, "y_correction") for m in debug)
+
+
+@pytest.fixture
+def linked(
+    add_prepared: Callable[..., Action],
+    add_imaging: Callable[..., Action],
+    add_correction: Callable[..., Action],
+) -> tuple[Action, Action]:
+    """A milling, the imaging it moves away from, and the correction linked to the milling."""
+    milling = add_prepared("milling", "milling", slice_distance=10.0)
+    add_imaging("imaging")
+    correction = add_correction(["imaging"], linked_milling="milling")
+    return milling, correction
+
+
+def test_skipped_correction_warns_while_its_milling_mills(
+    workflow: Workflow, linked: tuple[Action, Action]
+) -> None:
+    _, correction = linked
+
+    warning = correction.skip_warning([correction])
+
+    assert warning is not None
+    assert mentions(warning, "milling", "imaging")
+    # the workflow names the action warning, for the dialog and the log
+    (line,) = workflow.skip_warnings([correction])
+    assert mentions(line, "correction", warning)
+
+
+def test_correction_skipped_with_its_milling_does_not_warn(
+    linked: tuple[Action, Action],
+) -> None:
+    milling, correction = linked
+
+    assert correction.skip_warning([milling, correction]) is None
+
+
+def test_correction_without_its_milling_does_not_warn(
+    add_imaging: Callable[..., Action], add_correction: Callable[..., Action]
+) -> None:
+    add_imaging("imaging")
+    correction = add_correction(["imaging"], linked_milling="gone")
+
+    assert correction.skip_warning([correction]) is None

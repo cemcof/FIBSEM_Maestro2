@@ -38,6 +38,9 @@ class Permissions:
         microscope_settings_editable: Edit the microscope settings dialog
             (evaluated when it opens).
         error_choice_enabled: Use the Retry / Skip / Skip and pause buttons.
+        slice_skip_enabled: Skip the rest of the slice, as far as the state
+            allows; the workflow must also have something to skip
+            (`RunController.planned_slice_skip`).
         task_busy: A microscope task is running (an input, exposed for views).
     """
 
@@ -52,6 +55,7 @@ class Permissions:
     reset_enabled: bool
     microscope_settings_editable: bool
     error_choice_enabled: bool
+    slice_skip_enabled: bool
     task_busy: bool
 
 
@@ -83,6 +87,12 @@ def permissions_for(state: AppState, danger_mode: bool, task_busy: bool) -> Perm
         reset_enabled=idle,
         microscope_settings_editable=settings_editable,
         error_choice_enabled=state is AppState.INTERRUPTED and not task_busy,
+        # while running, the skip waits for the current action like a pause
+        slice_skip_enabled=state is AppState.RUNNING
+        or (
+            state in (AppState.PAUSED, AppState.RELOADED, AppState.INTERRUPTED)
+            and not task_busy
+        ),
         task_busy=task_busy,
     )
 

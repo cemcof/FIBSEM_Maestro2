@@ -109,7 +109,7 @@ def stop_run(qtbot: QtBot, run: RunController) -> None:
         qtbot: The Qt test helper.
         run: The run controller.
     """
-    if run.state is AppState.RUNNING:
+    if run.state in (AppState.RUNNING, AppState.SKIPPING):
         run.pause()
     if run.state.is_running:
         qtbot.waitUntil(lambda: not run.state.is_running, timeout=TIMEOUT_MS)

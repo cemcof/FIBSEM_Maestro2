@@ -28,16 +28,22 @@ from fibsem_maestro.ui.app.session import WorkflowSession
 from fibsem_maestro.ui.views.dialogs.microscope_settings import (
     MicroscopeSettingsDialog,
 )
+from fibsem_maestro.ui.views.dialogs.slice_skip import SLICE_SKIP_TITLE
 from fibsem_maestro.ui.views.top_bar import (
+    SKIP_NOTHING_REASON,
+    SKIP_STATE_REASON,
+    SKIP_TOOLTIP,
     TASK_RUNNING_REASON,
     WAITING_FOR_CHOICE_TOOLTIP,
     top_bar_view,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
     from gui_testkit.dialogs import DirectoryChoices, MessageBoxes
+    from gui_testkit.situations import HeldStep
     from pytestqt.qtbot import QtBot
 
     from fibsem_maestro.ui.app.user_config import UserConfig
@@ -73,6 +79,61 @@ def test_top_bar_view_stopping_blinks() -> None:
     even = top_bar_view(AppState.STOPPING, 0, READY, permissions, 0)
     odd = top_bar_view(AppState.STOPPING, 0, READY, permissions, 1)
     assert even.color != odd.color
+
+
+def test_top_bar_view_skipping_blinks_between_running_and_its_own_colour() -> None:
+    permissions = permissions_for(AppState.SKIPPING, False, False)
+    even = top_bar_view(AppState.SKIPPING, 0, READY, permissions, 0)
+    odd = top_bar_view(AppState.SKIPPING, 0, READY, permissions, 1)
+    running = top_bar_view(AppState.RUNNING, 0, READY, permissions, 1)
+    stopping = top_bar_view(AppState.STOPPING, 0, READY, permissions, 1)
+
+    assert even.state_text == odd.state_text == "skipping"
+    assert even.color == running.color
+    # its own colour, not that of a pause
+    assert odd.color not in (running.color, stopping.color)
+
+
+def test_top_bar_view_skipping_offers_a_pause() -> None:
+    data = top_bar_view(
+        AppState.SKIPPING, 3, READY, permissions_for(AppState.SKIPPING, False, False), 0
+    )
+    assert (data.run_icon, data.run_enabled, data.run_tooltip) == ("pause", True, "")
+
+
+@pytest.mark.parametrize(
+    ("state", "busy", "readiness", "planned", "reason"),
+    [
+        (AppState.RUNNING, False, NOT_READY, True, None),
+        (AppState.PAUSED, False, READY, True, None),
+        (AppState.RELOADED, False, READY, True, None),
+        (AppState.INTERRUPTED, False, NOT_READY, True, None),
+        (AppState.PAUSED, False, NOT_READY, True, NOT_READY.reasons[0]),
+        (AppState.RELOADED, False, NOT_READY, True, NOT_READY.reasons[0]),
+        (AppState.PAUSED, False, READY, False, SKIP_NOTHING_REASON),
+        (AppState.RELOADED, True, READY, True, TASK_RUNNING_REASON),
+        (AppState.EDITING, False, READY, True, SKIP_STATE_REASON),
+        (AppState.FINISHED, False, READY, True, SKIP_STATE_REASON),
+        (AppState.STOPPING, False, READY, True, SKIP_STATE_REASON),
+        (AppState.SKIPPING, False, READY, True, SKIP_STATE_REASON),
+    ],
+)
+def test_top_bar_view_skip_button_says_why_it_is_disabled(
+    state: AppState,
+    busy: bool,
+    readiness: ReadinessReport,
+    planned: bool,
+    reason: str | None,
+) -> None:
+    data = top_bar_view(
+        state, 1, readiness, permissions_for(state, False, busy), 0, planned
+    )
+
+    assert data.skip_enabled is (reason is None)
+    if reason is None:
+        assert data.skip_tooltip == SKIP_TOOLTIP
+    else:
+        assert reason in data.skip_tooltip
 
 
 def test_top_bar_view_interrupted_waits_for_the_error_dialog() -> None:
@@ -411,3 +472,34 @@ def test_top_bar_microscope_settings_opens_an_editable_dialog_while_editing(
 
     assert len(shown) == 1
     assert shown[0].result() == MicroscopeSettingsDialog.DialogCode.Accepted
+
+
+def test_top_bar_skip_asks_then_skips_the_rest_of_the_slice(
+    qtbot: QtBot,
+    app: Composition,
+    boxes: MessageBoxes,
+    hold: Callable[..., HeldStep],
+) -> None:
+    first = add_prepared(qtbot, app, "first")
+    add_prepared(qtbot, app, "second")
+    top_bar = app.window.top_bar
+    assert not top_bar.skip_button.isEnabled()
+    held = hold(first)
+    top_bar.run_button.click()
+    qtbot.waitUntil(held.entered.is_set, timeout=TIMEOUT_MS)
+    assert top_bar.skip_button.isEnabled()
+
+    boxes.answer = QMessageBox.StandardButton.Cancel
+    top_bar.skip_button.click()
+    assert app.run.state is AppState.RUNNING
+
+    boxes.answer = QMessageBox.StandardButton.Yes
+    top_bar.skip_button.click()
+
+    assert boxes.titles() == [SLICE_SKIP_TITLE] * 2
+    assert all("'second'" in text for text in boxes.texts())
+    assert app.run.state is AppState.SKIPPING
+    assert top_bar.view_data().state_text == "skipping"
+    assert not top_bar.skip_button.isEnabled()
+    held.release.set()
+    wait_for_state(qtbot, app.run, AppState.RUNNING)

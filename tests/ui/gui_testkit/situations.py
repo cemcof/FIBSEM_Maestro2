@@ -19,9 +19,11 @@ from gui_testkit import TIMEOUT_MS
 if TYPE_CHECKING:
     from collections.abc import Generator
 
+    import pytest
     from pytestqt.qtbot import QtBot
 
     from fibsem_maestro.action.action import Action
+    from fibsem_maestro.action.outcome import StepOutcome
     from fibsem_maestro.ui.app.microscope_tasks import MicroscopeTasks
     from fibsem_maestro.ui.ports import TaskHandle
 
@@ -129,3 +131,47 @@ def linked_names(settings: object, field: str) -> list[str]:
         The linked names, in order.
     """
     return link_field(settings, field).names(settings)
+
+
+class HeldStep:
+    """
+    An action's first step, held until released, so that requests reach a run mid-action.
+
+    Attributes:
+        entered: Set once the held step has started.
+        release: Set to let it continue.
+    """
+
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+
+def hold_first_step(
+    monkeypatch: pytest.MonkeyPatch, action: Action, fail: bool = False
+) -> HeldStep:
+    """
+    Hold the first step the action executes until it is released.
+
+    Args:
+        monkeypatch: Restores the action's step after the test.
+        action: The action.
+        fail: The held step raises once released, as a failed action would.
+
+    Returns:
+        The held step; release it, also when the test fails, or the worker
+        waits for `TIMEOUT_MS`.
+    """
+    held = HeldStep()
+    run_step = action._run_step
+
+    def gated() -> StepOutcome:
+        if not held.entered.is_set():
+            held.entered.set()
+            held.release.wait(timeout=TIMEOUT_MS / 1000)
+            if fail:
+                raise RuntimeError("the held step failed")
+        return run_step()
+
+    monkeypatch.setattr(action, "_run_step", gated)
+    return held

@@ -20,10 +20,14 @@ from PyQt6.QtCore import (
 
 from fibsem_maestro.ui.app.errors import NotAllowedError
 from fibsem_maestro.ui.app.run_state import AppState
+from fibsem_maestro.ui.app.slice_skip import SliceSkipPlan, plan_slice_skip
 from fibsem_maestro.workflow.error_choice import ErrorChoice
 from fibsem_maestro.workflow.workflow import Workflow
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from fibsem_maestro.action.action import Action
     from fibsem_maestro.ui.app.microscope_tasks import MicroscopeTasks
     from fibsem_maestro.ui.app.session import WorkflowSession
     from fibsem_maestro.workflow.error import ActionError
@@ -37,8 +41,8 @@ class _RunWorker(QObject):
     """
     Executes one run of the workflow on its own thread (implements `WorkflowCallbacks`).
 
-    The GUI thread controls it through `pause`, `resume`, `submit_error_choice`
-    and `abort`, which only set flags and `threading.Event`s. It never touches
+    The GUI thread controls it through `pause`, `resume`, `request_slice_skip`,
+    `submit_error_choice` and `abort`, which only set flags and `threading.Event`s. It never touches
     widgets or services; it only emits.
 
     Args:
@@ -52,6 +56,8 @@ class _RunWorker(QObject):
     """The workflow's slice counter after the slice."""
     action_error = pyqtSignal(object)
     """An `ActionError`; the worker then waits for `submit_error_choice`."""
+    slice_skipped = pyqtSignal(object)
+    """The list of `Action`s skipped at the user's request (empty if none was left)."""
     finished = pyqtSignal()
     """`Workflow.run` returned normally."""
     failed = pyqtSignal(object)
@@ -63,6 +69,7 @@ class _RunWorker(QObject):
         super().__init__()
         self._workflow = workflow
         self._pause_requested = False
+        self._slice_skip_requested = False
         self._resume_event = threading.Event()
         # start in resumed state
         self._resume_event.set()
@@ -87,6 +94,20 @@ class _RunWorker(QObject):
     def is_pause_requested(self) -> bool:
         """Whether the workflow should pause after the current action."""
         return self._pause_requested
+
+    def is_slice_skip_requested(self) -> bool:
+        """Whether the workflow should skip the rest of the slice before its next action."""
+        return self._slice_skip_requested
+
+    def notify_slice_skipped(self, skipped: Sequence[Action]) -> None:
+        """
+        Announce that the requested skip is done; a new skip may be requested.
+
+        Args:
+            skipped: The actions skipped; empty if none was left to skip.
+        """
+        self._slice_skip_requested = False
+        self.slice_skipped.emit(list(skipped))
 
     def wait_for_resume(self) -> None:
         """
@@ -139,6 +160,10 @@ class _RunWorker(QObject):
         """Request a pause after the current action."""
         self._pause_requested = True
         self._resume_event.clear()
+
+    def request_slice_skip(self) -> None:
+        """Request skipping the rest of the slice before the next action starts."""
+        self._slice_skip_requested = True
 
     def resume(self) -> None:
         """Release a pause (or cancel a pending one)."""
@@ -201,8 +226,9 @@ class RunController(QObject):
     Owns the run state (`AppState`) and the worker thread of the current run.
 
     One fresh thread and worker exist per run; none exists while editing. The
-    microscope task runner is locked exactly while RUNNING or STOPPING. Calls
-    not allowed in the current state raise `NotAllowedError`.
+    microscope task runner is locked exactly while the workflow executes
+    (`AppState.is_running`). Calls not allowed in the current state raise
+    `NotAllowedError`.
 
     Args:
         session: The workflow session; its workflow is read when a run starts.
@@ -220,6 +246,8 @@ class RunController(QObject):
     """An `ActionError`; the worker waits for `choose()` or `skip_and_pause()`."""
     workflow_failed = pyqtSignal(object)
     """The exception that ended the run."""
+    slice_skipped = pyqtSignal(object)
+    """The list of `Action`s skipped at the user's request."""
 
     def __init__(
         self,
@@ -234,6 +262,8 @@ class RunController(QObject):
         self._active: _ActiveRun | None = None
         # True while the worker waits in request_error_choice
         self._awaiting_choice = False
+        # True from a skip request until the worker has skipped
+        self._skip_pending = False
 
     @property
     def state(self) -> AppState:
@@ -249,6 +279,19 @@ class RunController(QObject):
 
         Raises:
             NotAllowedError: In any other state, or while a microscope task runs.
+        """
+        self._start(skip_slice=False)
+
+    def _start(self, skip_slice: bool) -> None:
+        """
+        Start a run (see `start`).
+
+        Args:
+            skip_slice: Skip the rest of the current slice first (SKIPPING
+                instead of RUNNING).
+
+        Raises:
+            NotAllowedError: As `start`.
         """
         if self._state not in (AppState.EDITING, AppState.RELOADED, AppState.FINISHED):
             raise NotAllowedError(f"Cannot start the workflow while {self._state}.")
@@ -271,6 +314,7 @@ class RunController(QObject):
         worker.action_finished.connect(self._on_action_finished)
         worker.slice_finished.connect(self._on_slice_finished)
         worker.action_error.connect(self._on_action_error)
+        worker.slice_skipped.connect(self._on_slice_skipped)
         worker.finished.connect(self._on_finished)
         worker.failed.connect(self._on_failed)
         worker.done.connect(self._on_done)
@@ -280,8 +324,10 @@ class RunController(QObject):
 
         self._active = _ActiveRun(thread, worker, workflow)
         self._awaiting_choice = False
+        if skip_slice:
+            self._request_slice_skip(worker)
         thread.start()
-        self._set_state(AppState.RUNNING)
+        self._set_state(AppState.SKIPPING if skip_slice else AppState.RUNNING)
         QMetaObject.invokeMethod(
             worker,
             "run",
@@ -293,10 +339,16 @@ class RunController(QObject):
         """
         Request a pause; it takes effect after the current action (RUNNING -> STOPPING).
 
+        While SKIPPING, the skip goes first and the run pauses at the start of
+        the next slice.
+
         Raises:
-            NotAllowedError: If not RUNNING.
+            NotAllowedError: If neither RUNNING nor SKIPPING.
         """
-        if self._state is not AppState.RUNNING or self._active is None:
+        if (
+            self._state not in (AppState.RUNNING, AppState.SKIPPING)
+            or self._active is None
+        ):
             raise NotAllowedError(f"Cannot pause the workflow while {self._state}.")
         self._active.worker.pause()
         self._set_state(AppState.STOPPING)
@@ -335,7 +387,8 @@ class RunController(QObject):
         self._refuse_if_task_busy()
         self._awaiting_choice = False
         active.worker.submit_error_choice(choice)
-        self._set_state(AppState.RUNNING)
+        # a skip requested before the error is still to happen
+        self._set_state(AppState.SKIPPING if self._skip_pending else AppState.RUNNING)
 
     def skip_and_pause(self) -> None:
         """
@@ -354,6 +407,61 @@ class RunController(QObject):
         active.worker.pause()
         active.worker.submit_error_choice(ErrorChoice.SKIP)
         self._set_state(AppState.STOPPING)
+
+    def planned_slice_skip(self) -> SliceSkipPlan | None:
+        """
+        What `skip_slice` would do now.
+
+        Returns:
+            The plan, or None if the rest of the slice cannot be skipped now
+            (see `plan_slice_skip`).
+        """
+        return plan_slice_skip(
+            self._session.workflow, self._state, self._awaiting_choice
+        )
+
+    def skip_slice(self) -> None:
+        """
+        Skip the rest of the current slice; the run then continues with the next slice.
+
+        RUNNING: after the current action (-> SKIPPING). PAUSED: right away,
+        resuming the run. RELOADED: right away, starting a run. INTERRUPTED: the
+        failed action is skipped with the rest. The state is SKIPPING until the
+        skip is done, then RUNNING (or PAUSED, if a pause was requested meanwhile).
+
+        Raises:
+            NotAllowedError: If `planned_slice_skip` is None, or (except while
+                RUNNING) while a microscope task runs.
+        """
+        if self.planned_slice_skip() is None:
+            raise NotAllowedError(
+                f"Cannot skip the rest of the slice while {self._state}."
+            )
+
+        match self._state:
+            case AppState.RELOADED:
+                self._start(skip_slice=True)
+                return
+            case AppState.RUNNING:
+                active = self._require_active()
+                self._request_slice_skip(active.worker)
+            case AppState.PAUSED:
+                self._refuse_if_task_busy()
+                active = self._require_active()
+                self._request_slice_skip(active.worker)
+                active.worker.resume()
+            case AppState.INTERRUPTED:
+                active = self._require_awaiting_choice()
+                self._refuse_if_task_busy()
+                self._awaiting_choice = False
+                # requested first: the worker checks it right after the skip
+                self._request_slice_skip(active.worker)
+                active.worker.submit_error_choice(ErrorChoice.SKIP)
+            case _:
+                raise NotAllowedError(
+                    f"Cannot skip the rest of the slice while {self._state}."
+                )
+        self._set_state(AppState.SKIPPING)
 
     def abort(self) -> None:
         """
@@ -383,6 +491,7 @@ class RunController(QObject):
         if self._state.is_running or self._active is not None:
             raise NotAllowedError(f"Cannot return to editing while {self._state}.")
         self._awaiting_choice = False
+        self._skip_pending = False
         self._set_state(AppState.EDITING)
 
     def _on_paused(self) -> None:
@@ -411,6 +520,15 @@ class RunController(QObject):
             self.action_failed.emit(error)
         else:
             self._ignore("action_error")
+
+    def _on_slice_skipped(self, skipped: list[Action]) -> None:
+        if not self._from_active_worker():
+            return
+        self._skip_pending = False
+        if self._state is AppState.SKIPPING:
+            self._set_state(AppState.RUNNING)
+        if skipped:
+            self.slice_skipped.emit(skipped)
 
     def _on_finished(self) -> None:
         if not self._from_active_worker():
@@ -456,10 +574,20 @@ class RunController(QObject):
             active.workflow.callbacks = None
         self._active = None
         self._awaiting_choice = False
+        self._skip_pending = False
 
     def _from_active_worker(self) -> bool:
         # a late signal of a previous run must not disturb the current one
         return self._active is not None and self.sender() is self._active.worker
+
+    def _require_active(self) -> _ActiveRun:
+        if self._active is None:
+            raise NotAllowedError(f"No run to change while {self._state}.")
+        return self._active
+
+    def _request_slice_skip(self, worker: _RunWorker) -> None:
+        self._skip_pending = True
+        worker.request_slice_skip()
 
     def _require_awaiting_choice(self) -> _ActiveRun:
         if (

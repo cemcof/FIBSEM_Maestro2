@@ -135,7 +135,7 @@ class AppCommands:
         The run button: start, resume or pause, depending on the state.
 
         EDITING, RELOADED and FINISHED start a run; PAUSED resumes it; RUNNING
-        requests a pause; any other state does nothing.
+        and SKIPPING request a pause; any other state does nothing.
 
         Raises:
             NotAllowedError: If starting or resuming while the workflow is not
@@ -148,7 +148,7 @@ class AppCommands:
             case AppState.PAUSED:
                 self._require_ready()
                 self._run.resume()
-            case AppState.RUNNING:
+            case AppState.RUNNING | AppState.SKIPPING:
                 self._run.pause()
             case _:
                 pass
@@ -188,6 +188,34 @@ class AppCommands:
             self._permissions().error_choice_enabled, "Cannot answer the error now."
         )
         self._run.skip_and_pause()
+
+    def skip_slice(self) -> None:
+        """
+        Skip the rest of the current slice and continue with the next one.
+
+        See `RunController.skip_slice`.
+
+        Raises:
+            NotAllowedError: If `slice_skip_enabled` is false, nothing can be
+                skipped now, or the run would resume or start while the
+                workflow is not ready.
+        """
+        self._check(
+            self._permissions().slice_skip_enabled,
+            "Cannot skip the rest of the slice now.",
+        )
+        plan = self._run.planned_slice_skip()
+        if plan is None:
+            raise NotAllowedError("Nothing of the slice is left to skip.")
+        if self._run.state in (AppState.PAUSED, AppState.RELOADED):
+            # the run resumes or starts, as with the run button
+            self._require_ready()
+        self._session.text_logger().info(
+            f"Skip of the rest of slice {plan.slice} requested: "
+            + ", ".join(f"'{action.name}'" for action in plan.skipped)
+            + "."
+        )
+        self._run.skip_slice()
 
     def terminate(self) -> None:
         """Abandon an interrupted run before the application closes."""

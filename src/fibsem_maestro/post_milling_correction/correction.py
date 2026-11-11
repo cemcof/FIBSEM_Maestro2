@@ -23,6 +23,8 @@ from fibsem_maestro.settings.post_milling_correction_settings import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from fibsem_maestro.microscope.abstract_control.beam_control import BeamControl
 
 _WORKING_DISTANCE = "working_distance"
@@ -113,6 +115,36 @@ class PostMillingCorrection(
             else:
                 issues.extend(self._target_issues(target))
         return issues
+
+    def skip_warning(self, skipped: Sequence[Action]) -> str | None:
+        """
+        Warn if the linked milling mills this slice while the correction is skipped.
+
+        The corrected actions then keep their properties for the face before
+        this milling step: neither its vertical image shift nor its
+        working-distance change is applied, and nothing makes up for them later.
+
+        Args:
+            skipped: Every action skipped for the slice, this one included.
+
+        Returns:
+            The warning, or None if the milling is skipped too, does not exist,
+            or the correction would not run for this slice anyway.
+        """
+        try:
+            milling = self._actions.named(self._settings.linked_milling)
+        except KeyError:
+            return None
+        if any(action is milling for action in skipped) or not self.should_execute():
+            return None
+        corrected = ", ".join(
+            f"'{name}'" for name in dict.fromkeys(self._settings.corrected_actions)
+        )
+        return (
+            f"'{milling.name}' mills this slice, but its correction is skipped: "
+            f"{corrected or 'the corrected actions'} will not follow the face by "
+            "this milling step's vertical image shift and working-distance change."
+        )
 
     def _follows_default(self) -> bool:
         """Whether a correction follows its default, computed from the linked milling."""

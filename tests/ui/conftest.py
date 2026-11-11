@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 import pytest
 from gui_testkit.app import Services, build_services, shut_down
 from gui_testkit.dialogs import DirectoryChoices, ExitCalls, MessageBoxes
+from gui_testkit.situations import HeldStep, hold_first_step
 from gui_testkit.workflows import seed_for, simulated_workflow
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
@@ -175,3 +176,22 @@ def form_builder() -> FormBuilder:
 def form_context() -> FormContext:
     """An empty form context (no workflow, no microscope)."""
     return FormContext()
+
+
+@pytest.fixture
+def hold(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., HeldStep]]:
+    """
+    Hold the first step of an action until released (`hold_first_step`).
+
+    Every held step is released when the test ends, so that no worker waits.
+    """
+    held: list[HeldStep] = []
+
+    def install(action: Action, fail: bool = False) -> HeldStep:
+        step = hold_first_step(monkeypatch, action, fail)
+        held.append(step)
+        return step
+
+    yield install
+    for step in held:
+        step.release.set()

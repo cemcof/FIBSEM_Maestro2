@@ -20,7 +20,7 @@ from fibsem_maestro.logging.logging import with_logging_context
 from fibsem_maestro.settings.dynamic_default import unavailable_defaults
 
 if TYPE_CHECKING:
-    from collections.abc import Generator
+    from collections.abc import Generator, Sequence
 
     from fibsem_maestro.action_context.action_context import ActionContext
     from fibsem_maestro.microscope.abstract_control.beam_control import BeamControl
@@ -313,6 +313,23 @@ class Action[TSettings: ActionSettingsLike, TState: ActionState](ABC):
         Override to carry over additional files or notify collaborators; call `super()`.
         """
         self.write_properties(self.read_properties(), self._ctx.props_store.next)
+
+    def skip_warning(self, skipped: Sequence[Action]) -> str | None:
+        """
+        Warn about skipping this action for the current slice, along with others.
+
+        Shown when the user is asked to confirm skipping the rest of a slice,
+        and logged when it is skipped.
+
+        Args:
+            skipped: Every action skipped for the slice, this one included.
+
+        Returns:
+            What goes wrong if this action does not run, or None (the default)
+            if skipping it is harmless.
+        """
+        _ = skipped
+        return None
 
     def rename(self, name: str) -> None:
         """

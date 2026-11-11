@@ -11,11 +11,14 @@ class AppState(Enum):
     Where the workflow run stands; the value is what the top bar displays.
 
     STOPPING means a pause was requested and the current action is still executing.
+    SKIPPING means a skip of the rest of the slice was requested and is still
+    to happen (e.g. after the current action); the run then continues.
     """
 
     EDITING = "editing"
     RUNNING = "running"
     STOPPING = "stopping"
+    SKIPPING = "skipping"
     PAUSED = "paused"
     RELOADED = "reloaded"
     INTERRUPTED = "interrupted"
@@ -26,5 +29,5 @@ class AppState(Enum):
 
     @property
     def is_running(self) -> bool:
-        """True while the workflow thread executes actions, including while a pause is pending."""
-        return self in (AppState.RUNNING, AppState.STOPPING)
+        """True while the workflow thread executes actions, including while a pause or a skip is pending."""
+        return self in (AppState.RUNNING, AppState.STOPPING, AppState.SKIPPING)
