@@ -155,7 +155,7 @@ class AreaSelectWidget(QWidget, FieldEditor[list[RelativeArea]]):
             "background: #1a1a1a; border: 0.5px solid #444; border-radius: 4px;"
         )
         self._thumbnail_label.setText("No image")
-        self._thumbnail_label.mousePressEvent = lambda _: self._toggle()  # type: ignore
+        self._thumbnail_label.mousePressEvent = lambda _: self._toggle()
         self._thumbnail_label.setCursor(Qt.CursorShape.PointingHandCursor)
         outer.addWidget(self._thumbnail_label)
 

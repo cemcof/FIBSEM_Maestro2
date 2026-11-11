@@ -281,7 +281,7 @@ def test_2d_autofunction_moves_the_stigmator_onto_the_circle(
 
     moved = math.dist((beam.stigmator_x, beam.stigmator_y), (0.1, -0.1))
     assert moved == pytest.approx(0.01)
-    (saved,) = [p for plots in ctx.image_logger.plots.values() for p in plots]  # ty: ignore[unresolved-attribute]
+    (saved,) = [p for plots in ctx.image_logger.plots.values() for p in plots]  # ty: ignore[missing-attribute]
     assert saved.filename == "af_curve.png"
     assert "plane" in saved.plot.panels
 

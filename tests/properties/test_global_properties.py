@@ -242,7 +242,7 @@ def test_select_extra_property_is_selected() -> None:
     selected = props.select(_electron_names("vendor_specific_gain"))
 
     assert selected.electron_beam is not None
-    assert selected.electron_beam.vendor_specific_gain == 1.5  # ty: ignore[unresolved-attribute]
+    assert selected.electron_beam.vendor_specific_gain == 1.5  # ty: ignore[missing-attribute]
 
 
 def _names(
@@ -323,10 +323,10 @@ def test_select_result_shares_no_mutable_state_with_source() -> None:
 
     selected = p.select(_names(electron=("vendor_offsets",)))
     assert selected.electron_beam is not None
-    selected.electron_beam.vendor_offsets.append(3.0)  # ty: ignore[unresolved-attribute]
+    selected.electron_beam.vendor_offsets.append(3.0)  # ty: ignore[missing-attribute]
 
     assert p.electron_beam is not None
-    assert p.electron_beam.vendor_offsets == [1.0, 2.0]  # ty: ignore[unresolved-attribute]
+    assert p.electron_beam.vendor_offsets == [1.0, 2.0]  # ty: ignore[missing-attribute]
 
 
 def test_set_property_extra_on_existing_inner_object() -> None:
@@ -335,7 +335,7 @@ def test_set_property_extra_on_existing_inner_object() -> None:
     p.set_property("vendor_specific_gain", 1.5, BeamType.ELECTRON)
 
     assert p.electron_beam is not None
-    assert p.electron_beam.vendor_specific_gain == 1.5  # ty: ignore[unresolved-attribute]
+    assert p.electron_beam.vendor_specific_gain == 1.5  # ty: ignore[missing-attribute]
     assert p.electron_beam.working_distance == 4.0e6
 
 
@@ -345,7 +345,7 @@ def test_accumulate_property_unset_extra_is_set() -> None:
     p.accumulate_property("vendor_offset", 2.0, BeamType.ELECTRON)
 
     assert p.electron_beam is not None
-    assert p.electron_beam.vendor_offset == 2.0  # ty: ignore[unresolved-attribute]
+    assert p.electron_beam.vendor_offset == 2.0  # ty: ignore[missing-attribute]
 
 
 def test_accumulate_property_existing_extra_is_added() -> None:
@@ -354,7 +354,7 @@ def test_accumulate_property_existing_extra_is_added() -> None:
     p.accumulate_property("vendor_offset", 0.5, BeamType.ELECTRON)
 
     assert p.electron_beam is not None
-    assert p.electron_beam.vendor_offset == 2.5  # ty: ignore[unresolved-attribute]
+    assert p.electron_beam.vendor_offset == 2.5  # ty: ignore[missing-attribute]
 
 
 @pytest.mark.parametrize("name", ["_private", "model_config", "get_property_names"])

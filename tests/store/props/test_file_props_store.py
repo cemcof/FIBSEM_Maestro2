@@ -189,7 +189,7 @@ def test_round_trip_preserves_dynamically_added_properties(
     props = store.read("props.yaml")
     assert props.electron_beam is not None
 
-    assert props.electron_beam.custom_property == pytest.approx(12.5)  # ty: ignore[unresolved-attribute]
+    assert props.electron_beam.custom_property == pytest.approx(12.5)  # ty: ignore[missing-attribute]
 
 
 def test_round_trip_of_empty_properties(store: FilePropsStore) -> None:

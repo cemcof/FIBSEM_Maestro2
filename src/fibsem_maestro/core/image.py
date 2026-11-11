@@ -355,7 +355,7 @@ class _ImageBase[TDType: np.generic](np.ndarray[Any, np.dtype[TDType]]):
                 - A `(min_value, max_value)` tuple giving the valid intensity
                   range for that bit depth, where `min_value` is always 0.
         """
-        max_value = float(np.nanmax(self))
+        max_value = float(np.nanmax(self))  # ty: ignore
 
         bit_depth = int(np.ceil(np.log2(max_value + 1)))
         max_allowed = (1 << bit_depth) - 1
