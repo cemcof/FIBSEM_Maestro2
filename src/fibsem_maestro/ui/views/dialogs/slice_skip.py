@@ -37,7 +37,7 @@ def slice_skip_question(plan: SliceSkipPlan) -> str:
         f"These actions will not run for slice {current}: {names}.",
         (
             f"They keep their properties and state for slice {following}, and the "
-            f"workflow continues with slice {following}."
+            f"workflow pauses at the start of slice {following}."
         ),
     ]
     if plan.warnings:

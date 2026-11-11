@@ -1,6 +1,14 @@
 # Released under GPL-3.0 License.
 # Copyright (c) 2024-2026 CEMCOF
 
+"""
+`RunController`: the run state machine on real short runs.
+
+The runs execute two adjust-props actions on the simulated microscope. A run is
+bounded by lowering `Workflow.MAX_SLICE`; an action error is produced by storing
+props the microscope refuses to apply (`store_unappliable_props`).
+"""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -439,9 +447,10 @@ def held_in_first(
     return held
 
 
-def test_run_skip_slice_while_running_waits_for_the_current_action(
+def test_run_skip_slice_while_running_waits_for_the_current_action_then_pauses(
     qtbot: QtBot,
     services: Services,
+    session: WorkflowSession,
     actions: tuple[Action, Action],
     hold: Callable[..., HeldStep],
 ) -> None:
@@ -454,16 +463,24 @@ def test_run_skip_slice_while_running_waits_for_the_current_action(
 
     assert run.state is AppState.SKIPPING
     assert run.state.is_running and services.tasks.locked
+    # the run pauses itself after the skip
+    with pytest.raises(NotAllowedError):
+        run.pause()
     with qtbot.waitSignal(run.slice_skipped, timeout=TIMEOUT_MS) as blocker:
         held.release.set()
     assert blocker.args == [[second]]
-    assert run.state is AppState.RUNNING
-    assert entered[:3] == [AppState.RUNNING, AppState.SKIPPING, AppState.RUNNING]
+    wait_for_state(qtbot, run, AppState.PAUSED)
+    assert entered[:3] == [AppState.RUNNING, AppState.SKIPPING, AppState.PAUSED]
+    # paused before anything of the next slice ran
+    assert session.slice == 2
+    assert [action.ctx.slice for action in actions] == [2, 2]
+    assert not services.tasks.locked
 
 
-def test_run_skip_slice_while_paused_skips_and_resumes(
+def test_run_skip_slice_while_paused_skips_and_pauses_again(
     qtbot: QtBot,
     services: Services,
+    session: WorkflowSession,
     actions: tuple[Action, Action],
     hold: Callable[..., HeldStep],
 ) -> None:
@@ -479,28 +496,14 @@ def test_run_skip_slice_while_paused_skips_and_resumes(
         run.skip_slice()
         assert run.state is AppState.SKIPPING
     assert blocker.args == [[second]]
-    assert run.state is AppState.RUNNING
-
-
-def test_run_pause_while_skipping_pauses_before_the_next_slice(
-    qtbot: QtBot,
-    services: Services,
-    session: WorkflowSession,
-    actions: tuple[Action, Action],
-    hold: Callable[..., HeldStep],
-) -> None:
-    run = services.run
-    held = held_in_first(qtbot, run, hold, actions[0])
-    run.skip_slice()
-
-    run.pause()
-    assert run.state is AppState.STOPPING
-    held.release.set()
-
     wait_for_state(qtbot, run, AppState.PAUSED)
-    # the skip went first; nothing of the next slice ran
     assert session.slice == 2
     assert [action.ctx.slice for action in actions] == [2, 2]
+
+    # resuming runs the next slice as usual
+    with qtbot.waitSignal(run.action_finished, timeout=TIMEOUT_MS) as finished:
+        run.resume()
+    assert finished.args == [first]
 
 
 def test_run_skip_slice_after_an_error_skips_the_failed_action_with_the_rest(
@@ -542,7 +545,7 @@ def test_run_skip_requested_before_an_error_is_still_pending_after_the_choice(
         run.choose(ErrorChoice.RETRY)
         assert run.state is AppState.SKIPPING
     assert blocker.args == [[second]]
-    assert run.state is AppState.RUNNING
+    wait_for_state(qtbot, run, AppState.PAUSED)
 
 
 def test_run_skip_slice_after_a_reload_starts_the_run(

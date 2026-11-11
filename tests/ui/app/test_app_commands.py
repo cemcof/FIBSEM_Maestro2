@@ -299,7 +299,7 @@ def test_commands_skip_slice_from_paused_needs_a_ready_workflow(
     services.validity.set_has_errors(prepared[0], False)
     commands.skip_slice()
     assert run.state is AppState.SKIPPING
-    wait_for_state(qtbot, run, AppState.RUNNING)
+    wait_for_state(qtbot, run, AppState.PAUSED)
 
 
 def test_commands_error_choice_resumes_interrupted_run(

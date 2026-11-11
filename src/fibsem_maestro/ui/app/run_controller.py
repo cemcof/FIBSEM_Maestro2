@@ -101,12 +101,16 @@ class _RunWorker(QObject):
 
     def notify_slice_skipped(self, skipped: Sequence[Action]) -> None:
         """
-        Announce that the requested skip is done; a new skip may be requested.
+        Announce that the requested skip is done, and request a pause.
+
+        The workflow pauses at the start of the next slice, before any of its
+        actions runs, so that the user decides how to continue.
 
         Args:
             skipped: The actions skipped; empty if none was left to skip.
         """
         self._slice_skip_requested = False
+        self.pause()
         self.slice_skipped.emit(list(skipped))
 
     def wait_for_resume(self) -> None:
@@ -339,16 +343,12 @@ class RunController(QObject):
         """
         Request a pause; it takes effect after the current action (RUNNING -> STOPPING).
 
-        While SKIPPING, the skip goes first and the run pauses at the start of
-        the next slice.
+        Not while SKIPPING: the run pauses after the skip anyway.
 
         Raises:
-            NotAllowedError: If neither RUNNING nor SKIPPING.
+            NotAllowedError: If not RUNNING.
         """
-        if (
-            self._state not in (AppState.RUNNING, AppState.SKIPPING)
-            or self._active is None
-        ):
+        if self._state is not AppState.RUNNING or self._active is None:
             raise NotAllowedError(f"Cannot pause the workflow while {self._state}.")
         self._active.worker.pause()
         self._set_state(AppState.STOPPING)
@@ -422,12 +422,12 @@ class RunController(QObject):
 
     def skip_slice(self) -> None:
         """
-        Skip the rest of the current slice; the run then continues with the next slice.
+        Skip the rest of the current slice, then pause at the start of the next slice.
 
-        RUNNING: after the current action (-> SKIPPING). PAUSED: right away,
-        resuming the run. RELOADED: right away, starting a run. INTERRUPTED: the
-        failed action is skipped with the rest. The state is SKIPPING until the
-        skip is done, then RUNNING (or PAUSED, if a pause was requested meanwhile).
+        RUNNING: after the current action. PAUSED: right away, resuming the
+        run. RELOADED: right away, starting a run. INTERRUPTED: the failed
+        action is skipped with the rest. The state is SKIPPING until the run
+        pauses (PAUSED), or ends if there is no next slice (FINISHED).
 
         Raises:
             NotAllowedError: If `planned_slice_skip` is None, or (except while
@@ -524,9 +524,8 @@ class RunController(QObject):
     def _on_slice_skipped(self, skipped: list[Action]) -> None:
         if not self._from_active_worker():
             return
+        # SKIPPING lasts until the pause that follows the skip
         self._skip_pending = False
-        if self._state is AppState.SKIPPING:
-            self._set_state(AppState.RUNNING)
         if skipped:
             self.slice_skipped.emit(skipped)
 

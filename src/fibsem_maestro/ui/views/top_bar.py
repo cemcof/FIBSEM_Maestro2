@@ -34,7 +34,17 @@ from fibsem_maestro.ui.views.dialogs.microscope_settings import (
 )
 from fibsem_maestro.ui.views.dialogs.slice_skip import confirm_slice_skip
 from fibsem_maestro.ui.widgets.icon_button import IconButton
-from fibsem_maestro.ui.widgets.icons import ICON_PAUSE, ICON_PLAY, ICON_SKULL, svg_icon
+from fibsem_maestro.ui.widgets.icons import (
+    ICON_IMPORT_WORKFLOW,
+    ICON_MICROSCOPE,
+    ICON_NEW_WORKFLOW,
+    ICON_PAUSE,
+    ICON_PLAY,
+    ICON_SKIP_SLICE,
+    ICON_SKULL,
+    ICON_START_OVER,
+    svg_icon,
+)
 
 if TYPE_CHECKING:
     from fibsem_maestro.ui.app.commands import AppCommands
@@ -52,9 +62,37 @@ TASK_RUNNING_REASON = "A microscope task is running."
 WAITING_FOR_CHOICE_TOOLTIP = "Waiting for a choice in the error dialog."
 """Run tooltip in INTERRUPTED."""
 
+SKIPPING_RUN_TOOLTIP = "The workflow pauses once the rest of the slice is skipped."
+"""Run tooltip in SKIPPING."""
+
+NEW_NAME = "New workflow"
+"""User-facing name of the "New workflow" button (`AppCommands.new_workflow`)."""
+
+IMPORT_NAME = "Import workflow"
+"""User-facing name of the "Import workflow" button (`AppCommands.import_workflow`)."""
+
+START_OVER_NAME = "Start over"
+"""User-facing name of `AppCommands.reset_workflow`, called "reset" in the code."""
+
+SKIP_NAME = "Skip rest of slice"
+"""User-facing name of `AppCommands.skip_slice`."""
+
+MICROSCOPE_NAME = "Microscope settings"
+"""User-facing name of the microscope settings button."""
+
+NEW_TOOLTIP = f"{NEW_NAME}: start an empty workflow in a new directory."
+
+IMPORT_TOOLTIP = (
+    f"{IMPORT_NAME}: replace the actions and propagation rules by those of "
+    "another workflow directory."
+)
+
+START_OVER_TOOLTIP = (
+    f"{START_OVER_NAME}: delete the data of every slice and return to slice 0."
+)
+
 SKIP_TOOLTIP = (
-    "Skip the actions of the current slice that have not run yet and continue "
-    "with the next slice. An action executing finishes first."
+    f"{SKIP_NAME}: skip the actions of the current slice that have not run yet."
 )
 """Tooltip of the skip button while it is enabled."""
 
@@ -102,7 +140,7 @@ class TopBarViewData:
         run_tooltip: Tooltip of the run button ("" for none); None to leave it (STOPPING).
         new_enabled: Whether "New workflow" is enabled.
         import_enabled: Whether "Import workflow" is enabled.
-        reset_enabled: Whether "Reset workflow" is enabled.
+        reset_enabled: Whether "Start over" is enabled.
         skip_enabled: Whether "Skip rest of slice" is enabled.
         skip_tooltip: Tooltip of "Skip rest of slice".
     """
@@ -155,8 +193,12 @@ def top_bar_view(
         case AppState.STOPPING:
             # the pause is on its way; leave the button as it is
             run_icon, run_enabled, run_tooltip = None, None, None
-        case AppState.RUNNING | AppState.SKIPPING:
+        case AppState.RUNNING:
             run_icon, run_enabled, run_tooltip = "pause", True, ""
+        case AppState.SKIPPING:
+            # the run pauses by itself after the skip
+            run_icon, run_enabled = "pause", False
+            run_tooltip = SKIPPING_RUN_TOOLTIP
         case AppState.INTERRUPTED:
             run_icon, run_enabled = "play", False
             run_tooltip = WAITING_FOR_CHOICE_TOOLTIP
@@ -226,7 +268,8 @@ def _skip_button(
         reasons = ()
 
     if reasons:
-        return False, readiness_tooltip(reasons, "Cannot skip:")
+        # the button shows no text: the tooltip names it
+        return False, f"{SKIP_NAME}\n" + readiness_tooltip(reasons, "Cannot skip:")
     return True, SKIP_TOOLTIP
 
 
@@ -326,21 +369,30 @@ class TopBar(QWidget):
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(8)
 
-        self._new_btn = QPushButton("New workflow")
+        self._new_btn = IconButton(ICON_NEW_WORKFLOW, NEW_TOOLTIP, NEW_NAME)
         self._new_btn.clicked.connect(self._on_new_workflow)
         layout.addWidget(self._new_btn)
 
-        self._import_btn = QPushButton("Import workflow")
+        self._import_btn = IconButton(ICON_IMPORT_WORKFLOW, IMPORT_TOOLTIP, IMPORT_NAME)
         self._import_btn.clicked.connect(self._on_import_workflow)
         layout.addWidget(self._import_btn)
 
-        self._reset_btn = QPushButton("Reset workflow")
+        self._reset_btn = IconButton(
+            ICON_START_OVER, START_OVER_TOOLTIP, START_OVER_NAME
+        )
         self._reset_btn.clicked.connect(self._on_reset_workflow)
         layout.addWidget(self._reset_btn)
 
+        # the tooltip follows the state (`TopBarViewData.skip_tooltip`)
+        self._skip_btn = IconButton(ICON_SKIP_SLICE, SKIP_TOOLTIP, SKIP_NAME)
+        self._skip_btn.clicked.connect(self._on_skip_slice)
+        layout.addWidget(self._skip_btn)
+
         layout.addWidget(vertical_separator())
 
-        self._microscope_btn = QPushButton("Microscope settings")
+        self._microscope_btn = IconButton(
+            ICON_MICROSCOPE, MICROSCOPE_NAME, MICROSCOPE_NAME
+        )
         self._microscope_btn.clicked.connect(self._on_microscope_settings)
         layout.addWidget(self._microscope_btn)
 
@@ -349,10 +401,6 @@ class TopBar(QWidget):
         self._run_btn = _RunButton()
         self._run_btn.clicked.connect(self._on_run)
         layout.addWidget(self._run_btn)
-
-        self._skip_btn = QPushButton("Skip rest of slice")
-        self._skip_btn.clicked.connect(self._on_skip_slice)
-        layout.addWidget(self._skip_btn)
 
         status_layout = QHBoxLayout()
         status_layout.setSpacing(1)
@@ -434,27 +482,27 @@ class TopBar(QWidget):
         return self._run_btn
 
     @property
-    def skip_button(self) -> QPushButton:
+    def skip_button(self) -> IconButton:
         """The "Skip rest of slice" button."""
         return self._skip_btn
 
     @property
-    def new_button(self) -> QPushButton:
+    def new_button(self) -> IconButton:
         """The "New workflow" button."""
         return self._new_btn
 
     @property
-    def import_button(self) -> QPushButton:
+    def import_button(self) -> IconButton:
         """The "Import workflow" button."""
         return self._import_btn
 
     @property
-    def reset_button(self) -> QPushButton:
-        """The "Reset workflow" button."""
+    def reset_button(self) -> IconButton:
+        """The "Start over" button (`AppCommands.reset_workflow`)."""
         return self._reset_btn
 
     @property
-    def microscope_button(self) -> QPushButton:
+    def microscope_button(self) -> IconButton:
         """The "Microscope settings" button."""
         return self._microscope_btn
 
@@ -550,7 +598,10 @@ class TopBar(QWidget):
         answer = QMessageBox.warning(
             self,
             "Data will be lost!",
-            "Resetting the workflow will PERMANENTLY delete all data from all completed slices!\n\nAre you sure you want to continue?",
+            "Starting over PERMANENTLY deletes the data of every slice (images, "
+            "logs and stored properties) and returns the workflow to slice 0. "
+            "The actions and their settings are kept.\n\n"
+            "Are you sure you want to continue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
         )
@@ -560,7 +611,7 @@ class TopBar(QWidget):
         try:
             self._commands.reset_workflow()
         except WorkflowResetError as e:
-            QMessageBox.critical(self, "Error", f"Could not reset the workflow: {e}")
+            QMessageBox.critical(self, "Error", f"Could not start over: {e}")
 
     def _on_microscope_settings(self) -> None:
         """Open the microscope settings dialog."""

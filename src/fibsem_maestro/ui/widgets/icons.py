@@ -74,6 +74,36 @@ ICON_SKIP = '<path d="M5 5.5v13l9.5-6.5z" fill="currentColor"/><path d="M18.5 5.
 ICON_CANCEL = '<circle cx="12" cy="12" r="9"/><path d="M9 9l6 6M15 9l-6 6"/>'
 """Circle with a cross: abandon the run."""
 
+ICON_NEW_WORKFLOW = (
+    '<path d="M14 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7z"/>'
+    '<path d="M14 3v4h4"/><path d="M12 11v6M9 14h6"/>'
+)
+"""Sheet with a plus: create a new workflow."""
+
+ICON_IMPORT_WORKFLOW = (
+    '<path d="M3 7a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4'
+    'a1 1 0 0 1-1-1z"/>'
+    '<path d="M12 10.5v5.5"/><path d="M9.5 13.5L12 16l2.5-2.5"/>'
+)
+"""Arrow into a folder: import the actions of another workflow."""
+
+ICON_START_OVER = (
+    '<path d="M4.5 5.5v13"/>'
+    '<path d="M12.5 6.5v11L6.5 12z" fill="currentColor"/>'
+    '<path d="M19.5 6.5v11L13.5 12z" fill="currentColor"/>'
+)
+"""Double triangle back against a bar: return to slice 0, deleting the acquired data."""
+
+ICON_SKIP_SLICE = '<path d="M4 12h15"/><path d="M13 6l6 6-6 6"/>'
+"""Single arrow forward: skip the rest of the slice, a small step forward."""
+
+ICON_MICROSCOPE = (
+    '<path d="M7.5 3.5l3 1.5-3.5 7-3-1.5z"/><path d="M5.5 11.5l-1 2"/>'
+    '<path d="M12 8.5a5.5 5.5 0 0 1 2 10"/><path d="M8 15.5h6"/>'
+    '<path d="M5 20.5h14"/><path d="M14 18.5v2"/>'
+)
+"""Microscope: the microscope settings."""
+
 _SVG_TEMPLATE = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
     'color="{color}" stroke="{color}" stroke-width="2" stroke-linecap="round" '

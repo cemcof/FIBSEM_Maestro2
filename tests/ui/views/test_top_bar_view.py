@@ -94,11 +94,12 @@ def test_top_bar_view_skipping_blinks_between_running_and_its_own_colour() -> No
     assert odd.color not in (running.color, stopping.color)
 
 
-def test_top_bar_view_skipping_offers_a_pause() -> None:
+def test_top_bar_view_skipping_offers_no_pause_since_it_pauses_anyway() -> None:
     data = top_bar_view(
         AppState.SKIPPING, 3, READY, permissions_for(AppState.SKIPPING, False, False), 0
     )
-    assert (data.run_icon, data.run_enabled, data.run_tooltip) == ("pause", True, "")
+    assert (data.run_icon, data.run_enabled) == ("pause", False)
+    assert data.run_tooltip
 
 
 @pytest.mark.parametrize(
@@ -440,7 +441,8 @@ def test_top_bar_reset_failure_shows_an_error_and_ends_editing(
     app.window.top_bar.reset_button.click()
 
     assert boxes.titles() == ["Data will be lost!", "Error"]
-    assert boxes.texts()[1].startswith("Could not reset the workflow: ")
+    # the cause is reported
+    assert "in use" in boxes.texts()[1]
     assert app.run.state is AppState.EDITING
 
 
@@ -502,4 +504,5 @@ def test_top_bar_skip_asks_then_skips_the_rest_of_the_slice(
     assert top_bar.view_data().state_text == "skipping"
     assert not top_bar.skip_button.isEnabled()
     held.release.set()
-    wait_for_state(qtbot, app.run, AppState.RUNNING)
+    wait_for_state(qtbot, app.run, AppState.PAUSED)
+    assert app.session.slice == 2

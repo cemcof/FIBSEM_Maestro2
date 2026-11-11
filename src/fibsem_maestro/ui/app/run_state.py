@@ -11,8 +11,9 @@ class AppState(Enum):
     Where the workflow run stands; the value is what the top bar displays.
 
     STOPPING means a pause was requested and the current action is still executing.
-    SKIPPING means a skip of the rest of the slice was requested and is still
-    to happen (e.g. after the current action); the run then continues.
+    SKIPPING means a skip of the rest of the slice was requested; the run
+    executes until the skip is done (e.g. after the current action), then
+    pauses at the start of the next slice.
     """
 
     EDITING = "editing"

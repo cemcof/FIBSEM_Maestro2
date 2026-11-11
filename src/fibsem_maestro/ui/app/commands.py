@@ -123,7 +123,7 @@ class AppCommands:
             NotAllowedError: If `reset_enabled` is false.
             WorkflowResetError: If the reset failed.
         """
-        self._check(self._permissions().reset_enabled, "Cannot reset the workflow now.")
+        self._check(self._permissions().reset_enabled, "Cannot start over now.")
         self._run.abort()
         try:
             self._session.reset()
@@ -135,7 +135,7 @@ class AppCommands:
         The run button: start, resume or pause, depending on the state.
 
         EDITING, RELOADED and FINISHED start a run; PAUSED resumes it; RUNNING
-        and SKIPPING request a pause; any other state does nothing.
+        requests a pause; any other state does nothing.
 
         Raises:
             NotAllowedError: If starting or resuming while the workflow is not
@@ -148,7 +148,7 @@ class AppCommands:
             case AppState.PAUSED:
                 self._require_ready()
                 self._run.resume()
-            case AppState.RUNNING | AppState.SKIPPING:
+            case AppState.RUNNING:
                 self._run.pause()
             case _:
                 pass
@@ -191,7 +191,7 @@ class AppCommands:
 
     def skip_slice(self) -> None:
         """
-        Skip the rest of the current slice and continue with the next one.
+        Skip the rest of the current slice and pause at the start of the next one.
 
         See `RunController.skip_slice`.
 

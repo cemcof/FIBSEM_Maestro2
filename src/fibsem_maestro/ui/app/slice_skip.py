@@ -21,7 +21,8 @@ class SliceSkipPlan:
     What skipping the rest of the current slice would do, for the user to confirm.
 
     The skipped actions carry their properties and state over to the next
-    slice unchanged (`Action.skip`); the run then continues with the next slice.
+    slice unchanged (`Action.skip`); the run then pauses at the start of the
+    next slice.
 
     Attributes:
         slice: The workflow's current slice, the one whose rest is skipped.
