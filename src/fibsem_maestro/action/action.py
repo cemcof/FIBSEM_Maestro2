@@ -192,10 +192,14 @@ class Action[TSettings: ActionSettingsLike, TState: ActionState](ABC):
 
         Returns:
             The action's settings, the workflow's actions and the action's
-            stored properties (`stored_beam_properties`).
+            stored properties (`stored_beam_properties`); the defaults the
+            action uses are logged at debug level.
         """
         return ActionDefaults(
-            self._settings, self._actions, self.stored_beam_properties
+            self._settings,
+            self._actions,
+            self.stored_beam_properties,
+            self._ctx.text_logger,
         )
 
     def stored_beam_properties(self) -> BeamProperties | None:

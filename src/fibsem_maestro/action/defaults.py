@@ -9,7 +9,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
     from fibsem_maestro.action.action import Action
+    from fibsem_maestro.logging.text.text_logger import TextLogger
     from fibsem_maestro.properties.beam_properties import BeamProperties
+    from fibsem_maestro.settings.dynamic_default import UsedDefault
 
 
 class ActionDefaults:
@@ -21,6 +23,7 @@ class ActionDefaults:
         actions: The workflow's actions, for the settings of linked actions.
         beam_properties: Returns the action's stored properties on its beam
             (`Action.stored_beam_properties`).
+        log: Receives a debug line for every default used; None to drop them.
     """
 
     def __init__(
@@ -28,10 +31,12 @@ class ActionDefaults:
         settings: object,
         actions: Iterable[Action],
         beam_properties: Callable[[], BeamProperties | None],
+        log: TextLogger | None = None,
     ) -> None:
         self._settings = settings
         self._actions = actions
         self._beam_properties = beam_properties
+        self._log = log
 
     @property
     def settings(self) -> object:
@@ -54,3 +59,13 @@ class ActionDefaults:
     def beam_properties(self) -> BeamProperties | None:
         """The action's stored properties on its beam, or None if none are stored."""
         return self._beam_properties()
+
+    def default_used(self, used: UsedDefault) -> None:
+        """
+        Log a default the action uses, at debug level.
+
+        Args:
+            used: The field and the value it takes.
+        """
+        if self._log is not None:
+            self._log.debug(str(used))

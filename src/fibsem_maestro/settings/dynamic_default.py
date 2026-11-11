@@ -1,25 +1,14 @@
 # Released under GPL-3.0 License.
 # Copyright (c) 2024-2026 CEMCOF
 
-"""
-Defaults computed from other settings or from an action's stored properties.
-
-A field with a dynamic default is declared `Annotated[T | None, DynamicDefault(...)]`
-with the default None. None means "follow the default": the effective value is
-computed whenever it is needed, so it changes with what it is computed from. A
-value set by the user is stored and no longer follows.
-
-The default is computed from the object holding the field and a
-`DefaultContext`: the settings of the action the field belongs to, the
-settings of the other actions, and the action's stored properties. The action
-and the forms read effective values the same way (`effective_value`,
-`with_defaults`), each with a context of its own.
-"""
-
+import dataclasses
 from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel
+
+from fibsem_maestro.settings.form_utils import FieldUnit
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -56,6 +45,44 @@ class DefaultContext(Protocol):
             are stored (the action was not prepared) or it works on no beam.
         """
         ...
+
+    def default_used(self, used: UsedDefault) -> None:
+        """
+        Take note of a default computed to be used, e.g. log it.
+
+        Not called for defaults only shown or checked (`effective_value`,
+        `unavailable_defaults`).
+
+        Args:
+            used: The field and the value it takes.
+        """
+        ...
+
+
+@dataclass(frozen=True)
+class UsedDefault:
+    """
+    A default computed to be used.
+
+    Attributes:
+        path: The dotted path of the field within the settings the default
+            was computed for, e.g. "sharpness_metric.detail" for a criterion's.
+        value: The default.
+        source: What it was computed from (`DynamicDefault.source`).
+        unit: The field's unit, e.g. "nm", or None.
+    """
+
+    path: str
+    value: Any
+    source: str
+    unit: str | None = None
+
+    def __str__(self) -> str:
+        unit = f" {self.unit}" if self.unit else ""
+        return (
+            f"'{self.path}' follows its default: {_shown(self.value)}{unit}, "
+            f"computed from {self.source}."
+        )
 
 
 class DefaultUnavailableError(ValueError):
@@ -185,6 +212,8 @@ def required_value(owner: object, name: str, context: DefaultContext) -> Any:
     """
     The effective value of a field with a dynamic default, which must be available.
 
+    A computed default is reported to the context as used.
+
     Args:
         owner: The object holding the field.
         name: The field name.
@@ -197,12 +226,17 @@ def required_value(owner: object, name: str, context: DefaultContext) -> Any:
         DefaultUnavailableError: If the field follows a default that cannot be
             computed; the message says why.
     """
-    value = effective_value(owner, name, context)
+    value = getattr(owner, name)
     if value is not None:
         return value
     declared = dynamic_default_of(type(owner), name)
-    reason = declared.reason(owner, context) if declared is not None else "not set"
-    raise DefaultUnavailableError(f"'{name}': {reason}")
+    if declared is None:
+        raise DefaultUnavailableError(f"'{name}': not set")
+    value = declared.compute(owner, context)
+    if value is None:
+        raise DefaultUnavailableError(f"'{name}': {declared.reason(owner, context)}")
+    context.default_used(_used(owner, name, name, value, declared))
+    return value
 
 
 def unavailable_defaults(
@@ -222,7 +256,8 @@ def unavailable_defaults(
         `(dotted path, reason)` per such field, in declaration order.
     """
     found: list[tuple[str, str]] = []
-    _walk(settings, context, "", found)
+    # only checked, not used: nothing is reported
+    _walk(settings, context, "", found, [])
     return found
 
 
@@ -245,16 +280,23 @@ def with_defaults[T: BaseModel](settings: T, context: DefaultContext) -> T:
             names every such field and says why.
     """
     missing: list[tuple[str, str]] = []
-    resolved = _walk(settings, context, "", missing)
+    used: list[UsedDefault] = []
+    resolved = _walk(settings, context, "", missing, used)
     if missing:
         raise DefaultUnavailableError(
             "; ".join(f"'{path}': {reason}" for path, reason in missing)
         )
+    for default in used:
+        context.default_used(default)
     return resolved
 
 
 def _walk[T: BaseModel](
-    obj: T, context: DefaultContext, prefix: str, missing: list[tuple[str, str]]
+    obj: T,
+    context: DefaultContext,
+    prefix: str,
+    missing: list[tuple[str, str]],
+    used: list[UsedDefault],
 ) -> T:
     """
     Fill the defaults of `obj` and of the objects nested in it.
@@ -264,6 +306,7 @@ def _walk[T: BaseModel](
         context: What the defaults are computed from.
         prefix: The dotted path of `obj`, ending in "." unless empty.
         missing: Receives `(path, reason)` of each default that cannot be computed.
+        used: Receives each default computed.
 
     Returns:
         A copy with the defaults filled in, or `obj` if nothing changed.
@@ -278,8 +321,9 @@ def _walk[T: BaseModel](
                 missing.append((prefix + name, declared.reason(obj, context)))
             else:
                 updates[name] = default
+                used.append(_used(obj, name, prefix + name, default, declared))
         elif isinstance(value, BaseModel):
-            resolved = _walk(value, context, f"{prefix}{name}.", missing)
+            resolved = _walk(value, context, f"{prefix}{name}.", missing, used)
             if resolved is not value:
                 updates[name] = resolved
     if not updates:
@@ -289,3 +333,37 @@ def _walk[T: BaseModel](
     return type(obj).model_construct(
         _fields_set=obj.model_fields_set, **(values | updates)
     )
+
+
+def _used(
+    owner: object, name: str, path: str, value: Any, declared: DynamicDefault
+) -> UsedDefault:
+    """The report of a default computed for the field `name` of `owner`."""
+    field = type(owner).model_fields.get(name) if isinstance(owner, BaseModel) else None
+    units = (
+        [m.suffix for m in field.metadata if isinstance(m, FieldUnit)] if field else []
+    )
+    return UsedDefault(path, value, declared.source, units[0] if units else None)
+
+
+def _shown(value: Any) -> str:
+    """A value as written in a log message: floats short, dataclasses by their fields."""
+    match value:
+        case bool():
+            return str(value)
+        case float():
+            return f"{value:.6g}"
+        case Enum():
+            return str(value.value)
+        case tuple() | list():
+            return "(" + ", ".join(_shown(v) for v in value) + ")"
+        case BaseModel():
+            names = type(value).model_fields
+            return ", ".join(f"{n}={_shown(getattr(value, n))}" for n in names)
+        case _ if dataclasses.is_dataclass(value) and not isinstance(value, type):
+            return ", ".join(
+                f"{f.name}={_shown(getattr(value, f.name))}"
+                for f in dataclasses.fields(value)
+            )
+        case _:
+            return str(value)

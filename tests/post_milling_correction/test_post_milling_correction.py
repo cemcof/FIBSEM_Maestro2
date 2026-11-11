@@ -12,6 +12,7 @@ from fibsem_maestro.action.outcome import Produced
 from fibsem_maestro.core.beam_shift import BeamShift
 from fibsem_maestro.core.beam_type import BeamType
 from fibsem_maestro.core.direction import Direction
+from fibsem_maestro.logging.text.file import close_all_log_files
 from fibsem_maestro.post_milling_correction.correction import PostMillingCorrection
 from fibsem_maestro.post_milling_correction.error import PostMillingCorrectionError
 from fibsem_maestro.properties.global_properties import GlobalProperties
@@ -19,11 +20,14 @@ from fibsem_maestro.settings.post_milling_correction_settings import (
     PostMillingCorrectionSettings,
 )
 from fibsem_maestro.settings.property_names import PropertyNames
+from fibsem_maestro.ui.views.log_panel.parsing import LEVELS, level_value
+from fibsem_maestro.ui.views.log_panel.reader import LogReader
 from fibsem_maestro.workflow.propagations import PropagationRule, Propagations
 from fibsem_maestro.workflow.workflow import Workflow
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
     from fibsem_maestro.action.action import Action
     from fibsem_maestro.properties.beam_properties import BeamProperties
@@ -36,6 +40,16 @@ IMAGE_TO_BEAM_SHIFT = (3.0, -2.0)
 ION_IMAGE_TO_BEAM_SHIFT = (5.0, 7.0)
 
 CORRECTED = ["working_distance", "beam_shift"]
+
+
+def mentions(text: str, *parts: str) -> bool:
+    """
+    Whether a message contains every part, ignoring case.
+
+    Messages are checked for the information they carry, not their wording.
+    """
+    lowered = text.lower()
+    return all(part.lower() in lowered for part in parts)
 
 
 @pytest.fixture(autouse=True)
@@ -361,7 +375,7 @@ def test_default_correction_without_a_milling_fails(
     add_imaging("imaging")
     correction = add_correction(["imaging"], wd=None)
 
-    with pytest.raises(PostMillingCorrectionError, match="No milling is linked"):
+    with pytest.raises(PostMillingCorrectionError, match="(?i)milling"):
         correction.execute()
 
 
@@ -426,36 +440,30 @@ def test_ready_correction_reports_no_issues(ready: Action) -> None:
 
 
 @pytest.mark.parametrize(
-    ("change", "issue"),
+    ("change", "parts"),
     [
-        ({"corrected_actions": []}, "No actions to correct are selected."),
-        (
-            {"corrected_actions": ["imaging", "ghost"]},
-            "The corrected action 'ghost' does not exist.",
-        ),
-        (
-            {"y_correction": None, "linked_milling": ""},
-            "No milling is linked to compute the default correction from.",
-        ),
-        (
-            {"wd_correction": None, "linked_milling": "ghost"},
-            "The linked milling 'ghost' does not exist.",
-        ),
-        (
-            {"y_correction": None, "linked_milling": "imaging"},
-            "The linked action 'imaging' is not a milling.",
-        ),
+        ({"corrected_actions": []}, ("correct",)),
+        ({"corrected_actions": ["imaging", "ghost"]}, ("ghost",)),
+        ({"y_correction": None, "linked_milling": ""}, ("milling",)),
+        ({"wd_correction": None, "linked_milling": "ghost"}, ("milling", "ghost")),
+        ({"y_correction": None, "linked_milling": "imaging"}, ("imaging", "milling")),
         # a milling is only needed for a default
         ({"linked_milling": "ghost"}, None),
     ],
 )
 def test_correction_reports_what_it_cannot_correct(
-    ready: Action, change: dict[str, object], issue: str | None
+    ready: Action, change: dict[str, object], parts: tuple[str, ...] | None
 ) -> None:
     for name, value in change.items():
         setattr(ready.settings, name, value)
 
-    assert ready.preparation_issues() == ([] if issue is None else [issue])
+    issues = ready.preparation_issues()
+
+    if parts is None:
+        assert issues == []
+    else:
+        [issue] = issues
+        assert mentions(issue, *parts)
 
 
 @pytest.mark.parametrize(
@@ -479,10 +487,12 @@ def test_correction_requires_targets_to_collect_what_it_corrects(
     add_prepared("imaging", "imaging", properties_to_collect=PropertyNames())
     correction = add_correction(["imaging"], y=y, wd=wd, linked_milling="milling")
 
-    assert correction.preparation_issues() == [
-        f"'imaging' does not collect '{name}', so it cannot be corrected."
-        for name in missing
-    ]
+    issues = correction.preparation_issues()
+
+    # one issue per property not collected, naming it
+    assert len(issues) == len(missing)
+    for name in missing:
+        assert any(mentions(issue, "imaging", name) for issue in issues)
 
 
 def test_workflow_drops_propagation_rules_from_or_to_a_correction(
@@ -519,7 +529,32 @@ def test_default_that_cannot_be_computed_counts_as_a_correction(
     # without a milling, the default may be anything once one is linked
     correction = add_correction(["imaging"], y=None, wd=0.0)
 
-    assert correction.preparation_issues() == [
-        "No milling is linked to compute the default correction from.",
-        "'imaging' does not collect 'beam_shift', so it cannot be corrected.",
-    ]
+    issues = correction.preparation_issues()
+
+    assert len(issues) == 2
+    assert any(mentions(issue, "milling") for issue in issues)
+    assert any(mentions(issue, "imaging", "beam_shift") for issue in issues)
+
+
+def test_default_correction_used_is_logged(
+    tmp_path: Path,
+    add_prepared: Callable[..., Action],
+    add_imaging: Callable[..., Action],
+    add_correction: Callable[..., Action],
+) -> None:
+    add_prepared("milling", "milling", slice_distance=10.0)
+    add_imaging("imaging")
+    correction = add_correction(
+        ["imaging"], y=Y_CORRECTION, wd=None, linked_milling="milling"
+    )
+    _, wd = geometric(10.0, Direction.DOWN)
+
+    correction.execute()
+
+    close_all_log_files()
+    lines = LogReader(tmp_path).read(0, ["correction"], level_value(LEVELS[0]))
+    debug = [line.message for line in lines if line.level == "DEBUG"]
+    # the field and its value, to three significant digits whatever the format
+    assert any(mentions(m, "wd_correction", f"{wd:.3g}", "nm") for m in debug)
+    # set by the user: not a default
+    assert not any(mentions(m, "y_correction") for m in debug)

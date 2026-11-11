@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from fibsem_maestro.core.pattern_type import PatternType
     from fibsem_maestro.logging.text.text_logger import TextLogger
     from fibsem_maestro.properties.beam_properties import BeamProperties
-    from fibsem_maestro.settings.dynamic_default import DefaultContext
+    from fibsem_maestro.settings.dynamic_default import DefaultContext, UsedDefault
     from fibsem_maestro.ui.ports import ActionCatalog, PreviewPermission, PreviewPort
 
 
@@ -135,3 +135,12 @@ class _FormDefaults:
         """The stored beam properties of the edited action, or None outside its panel."""
         source = self._form.beam_properties
         return None if source is None else source()
+
+    def default_used(self, used: UsedDefault) -> None:
+        """
+        Ignore it: the forms only show defaults, the actions log what they use.
+
+        Args:
+            used: The field and the value it takes.
+        """
+        _ = used

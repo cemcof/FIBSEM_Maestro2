@@ -12,7 +12,11 @@ from fibsem_maestro.core.beam_type import BeamType
 from fibsem_maestro.post_milling_correction.error import PostMillingCorrectionError
 from fibsem_maestro.properties.beam_properties import BeamProperties
 from fibsem_maestro.properties.global_properties import GlobalProperties
-from fibsem_maestro.settings.dynamic_default import effective_value
+from fibsem_maestro.settings.dynamic_default import (
+    DefaultUnavailableError,
+    effective_value,
+    required_value,
+)
 from fibsem_maestro.settings.milling_settings import MillingSettings
 from fibsem_maestro.settings.post_milling_correction_settings import (
     PostMillingCorrectionSettings,
@@ -199,16 +203,18 @@ class PostMillingCorrection(
             PostMillingCorrectionError: If a correction follows its default and
                 the default cannot be computed.
         """
-        y_correction, wd_correction = (
-            effective_value(self._settings, name, self.default_context())
-            for name in (_Y_CORRECTION, _WD_CORRECTION)
-        )
-        if y_correction is None or wd_correction is None:
+        context = self.default_context()
+        try:
+            # a default used is logged
+            return (
+                required_value(self._settings, _Y_CORRECTION, context),
+                required_value(self._settings, _WD_CORRECTION, context),
+            )
+        except DefaultUnavailableError as e:
             problems = " ".join(self._milling_issues())
             raise PostMillingCorrectionError(
                 f"The default correction cannot be computed: {problems}"
-            )
-        return y_correction, wd_correction
+            ) from e
 
     def _resolve_targets(self) -> list[Action]:
         """

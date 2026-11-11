@@ -142,8 +142,7 @@ class LinearSweeping(BaseSettings):
         DynamicDefault(
             _default_range,
             _no_default_range,
-            "the horizontal field width (HFW) of the stored properties: "
-            f"±HFW/{RANGE_FIELD_DIVISOR}, for the working distance",
+            "the horizontal field width of the stored properties",
         ),
     ] = Field(
         default=None,

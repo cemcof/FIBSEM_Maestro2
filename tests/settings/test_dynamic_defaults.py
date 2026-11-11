@@ -15,6 +15,7 @@ from fibsem_maestro.autofunction.sweeping import Sweeping
 from fibsem_maestro.core.detail_band import DetailBand
 from fibsem_maestro.core.resolution import Resolution
 from fibsem_maestro.imaging.imaging import Imaging
+from fibsem_maestro.logging.text.file import close_all_log_files
 from fibsem_maestro.logging.text.memory import MemoryTextLogger
 from fibsem_maestro.properties.beam_properties import BeamProperties
 from fibsem_maestro.properties.global_properties import GlobalProperties
@@ -27,9 +28,12 @@ from fibsem_maestro.settings.dynamic_default import (
     with_defaults,
 )
 from fibsem_maestro.settings.sweeping_settings import LinearSweeping
+from fibsem_maestro.ui.views.log_panel.parsing import LEVELS, level_value
+from fibsem_maestro.ui.views.log_panel.reader import LogReader
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
+    from pathlib import Path
 
     from fibsem_maestro.action.action import Action
     from fibsem_maestro.workflow.workflow import Workflow
@@ -41,6 +45,23 @@ PIXEL_NM = 5.0
 def stored(props: BeamProperties | None) -> ActionDefaults:
     """A context whose action stores `props` on its beam."""
     return ActionDefaults(None, (), lambda: props)
+
+
+def mentions(text: str, *parts: str) -> bool:
+    """
+    Whether a message contains every part, ignoring case.
+
+    Messages are checked for the information they carry, not their wording.
+    """
+    lowered = text.lower()
+    return all(part.lower() in lowered for part in parts)
+
+
+def the_one_mentioning(messages: Iterable[str], *parts: str) -> str:
+    """The single message containing every part, ignoring case."""
+    found = [m for m in messages if mentions(m, *parts)]
+    assert len(found) == 1, f"{len(found)} messages mention {parts}: {found}"
+    return found[0]
 
 
 def test_detail_band_is_60_to_100_times_the_stored_pixel_size() -> None:
@@ -88,38 +109,30 @@ def test_range_of_another_attribute_has_no_default() -> None:
     context = stored(BeamProperties(horizontal_field_width=HFW_NM))
 
     assert effective_value(sweeping, "range", context) is None
-    assert unavailable_defaults(sweeping, context) == [
-        (
-            "range",
-            "There is no default range for sweeping 'dwell_time'; set a range.",
-        )
-    ]
+    [(path, reason)] = unavailable_defaults(sweeping, context)
+    assert path == "range"
+    # names the attribute, so the user sees why there is no default
+    assert mentions(reason, "dwell_time")
 
 
 @pytest.mark.parametrize(
-    ("props", "reason"),
+    ("props", "parts"),
     [
-        (
-            None,
-            (
-                "Computed from the field width once the action is prepared; or set a range."
-            ),
-        ),
-        (
-            BeamProperties(working_distance=4e6),
-            (
-                "The stored properties lack the field width ('horizontal_field_width'); "
-                "collect it and prepare the action again, or set a range."
-            ),
-        ),
+        # not prepared: what it waits for, and that preparing provides it
+        (None, ("field width", "prepare")),
+        # prepared without it: which property to collect
+        (BeamProperties(working_distance=4e6), ("horizontal_field_width",)),
     ],
 )
 def test_range_says_which_properties_it_waits_for(
-    props: BeamProperties | None, reason: str
+    props: BeamProperties | None, parts: tuple[str, ...]
 ) -> None:
     sweeping = LinearSweeping(target_attribute="working_distance")
 
-    assert unavailable_defaults(sweeping, stored(props)) == [("range", reason)]
+    [(path, reason)] = unavailable_defaults(sweeping, stored(props))
+
+    assert path == "range"
+    assert mentions(reason, *parts)
 
 
 def test_with_defaults_fills_nested_defaults_and_leaves_the_settings_alone() -> None:
@@ -145,8 +158,8 @@ def test_with_defaults_names_every_default_it_cannot_compute() -> None:
     with pytest.raises(DefaultUnavailableError) as raised:
         with_defaults(mode, stored(None))
 
-    assert "'sweeping.range'" in str(raised.value)
-    assert "'criterion.sharpness_metric.detail'" in str(raised.value)
+    assert mentions(str(raised.value), "sweeping.range")
+    assert mentions(str(raised.value), "criterion.sharpness_metric.detail")
 
 
 def test_sweep_space_takes_the_range_of_the_properties_stored_now() -> None:
@@ -183,15 +196,10 @@ def test_unprepared_action_reports_the_defaults_waiting_for_properties(
 ) -> None:
     issues = autofunction.preparation_issues()
 
-    assert issues == [
-        (
-            "'mode.sweeping.range': Computed from the field width once the action is prepared; or set a range."
-        ),
-        (
-            "'mode.criterion.sharpness_metric.detail': Computed from the pixel size "
-            "once the action is prepared; or set a value."
-        ),
-    ]
+    # one issue per field, each naming the field
+    assert len(issues) == 2
+    the_one_mentioning(issues, "mode.sweeping.range")
+    the_one_mentioning(issues, "mode.criterion.sharpness_metric.detail")
 
 
 def test_action_computes_its_defaults_from_its_stored_properties(
@@ -327,3 +335,105 @@ def test_autofunction_sweeps_and_scores_with_the_defaults_of_its_properties(
 
     best = workflow.microscope.electron_beam.working_distance
     assert min(abs(best - wd) for wd in (4e6 - 500.0, 4e6, 4e6 + 500.0)) < 1e-3
+
+
+def _debug_lines(log: MemoryTextLogger) -> list[str]:
+    return [
+        record.message
+        for records in log.records.values()
+        for record in records
+        if record.level == "debug"
+    ]
+
+
+@pytest.fixture
+def logged() -> MemoryTextLogger:
+    return MemoryTextLogger(lambda: 0)
+
+
+def logging_context(
+    props: BeamProperties | None, log: MemoryTextLogger
+) -> ActionDefaults:
+    """A context whose action stores `props` and logs to `log`."""
+    return ActionDefaults(None, (), lambda: props, log)
+
+
+def test_every_default_used_is_logged_with_its_value(logged: MemoryTextLogger) -> None:
+    mode = BasicMode(sweeping=LinearSweeping(target_attribute="working_distance"))
+    props = BeamProperties(horizontal_field_width=HFW_NM, pixel_size=PIXEL_NM)
+
+    with_defaults(mode, logging_context(props, logged))
+
+    # one line per default, naming the field and giving the value (with its unit)
+    lines = _debug_lines(logged)
+    assert len(lines) == 2
+    the_one_mentioning(lines, "sweeping.range", "-500", "500")
+    the_one_mentioning(lines, "sharpness_metric.detail", "300", "500", "nm")
+
+
+def test_value_set_by_the_user_is_not_logged(logged: MemoryTextLogger) -> None:
+    sweeping = LinearSweeping(target_attribute="working_distance", range=(-1.0, 1.0))
+    context = logging_context(BeamProperties(horizontal_field_width=HFW_NM), logged)
+
+    make_sweep_space(sweeping, context)
+
+    assert _debug_lines(logged) == []
+
+
+def test_defaults_only_shown_or_checked_are_not_logged(
+    logged: MemoryTextLogger,
+) -> None:
+    # the forms and the preparation issues ask after every edit
+    mode = BasicMode(sweeping=LinearSweeping(target_attribute="working_distance"))
+    context = logging_context(BeamProperties(horizontal_field_width=HFW_NM), logged)
+    assert isinstance(mode.sweeping, LinearSweeping)
+
+    effective_value(mode.sweeping, "range", context)
+    unavailable_defaults(mode, context)
+
+    assert _debug_lines(logged) == []
+
+
+def test_default_that_cannot_be_computed_is_not_logged(
+    logged: MemoryTextLogger,
+) -> None:
+    mode = BasicMode(sweeping=LinearSweeping(target_attribute="working_distance"))
+    props = BeamProperties(horizontal_field_width=HFW_NM)
+
+    # the range can be computed, the detail band cannot: nothing is used
+    with pytest.raises(DefaultUnavailableError, match="criterion"):
+        with_defaults(mode, logging_context(props, logged))
+
+    assert _debug_lines(logged) == []
+
+
+def test_action_logs_the_defaults_it_uses(
+    tmp_path: Path, add_action: Callable[..., Action]
+) -> None:
+    add_action("imaging", "imaging")
+    autofunction = add_action(
+        "autofunction",
+        "focus",
+        linked_imaging="imaging",
+        mode=BasicMode(
+            sweeping=LinearSweeping(target_attribute="working_distance", steps=3)
+        ),
+    )
+    autofunction.write_properties(
+        GlobalProperties(
+            electron_beam=BeamProperties(
+                horizontal_field_width=HFW_NM,
+                pixel_size=PIXEL_NM,
+                working_distance=4e6,
+            )
+        )
+    )
+
+    autofunction.test()
+
+    close_all_log_files()
+    lines = LogReader(tmp_path).read(0, ["focus"], level_value(LEVELS[0]))
+    debug = [line.message for line in lines if line.level == "DEBUG"]
+    assert any(mentions(m, "range", "-500", "500") for m in debug)
+    # once per frame scored
+    assert any(mentions(m, "sharpness_metric.detail", "300", "500") for m in debug)

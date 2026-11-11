@@ -135,8 +135,7 @@ class DetailBandMetric(BaseSettings):
         DynamicDefault(
             _default_detail,
             _no_default_detail,
-            "the pixel size of the stored properties: details "
-            f"{DETAIL_BAND_PIXELS[0]:g}-{DETAIL_BAND_PIXELS[1]:g} pixels across",
+            "the pixel size of the stored properties",
         ),
     ] = Field(
         default=None,

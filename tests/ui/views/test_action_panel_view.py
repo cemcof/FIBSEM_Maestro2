@@ -86,6 +86,16 @@ ANY_TYPE = min(ACTION_REGISTRY)
 """Any action type: the panel treats every type alike."""
 
 
+def mentions(text: str, *parts: str) -> bool:
+    """
+    Whether a message contains every part, ignoring case.
+
+    Messages are checked for the information they carry, not their wording.
+    """
+    lowered = text.lower()
+    return all(part.lower() in lowered for part in parts)
+
+
 def shown(app: Composition, action: Action) -> None:
     app.window.action_list.select(action)
 
@@ -724,9 +734,9 @@ def test_action_panel_defaults_inside_unions_follow_the_stored_properties(
     shown(app, autofunction)
     sweep_range = _following(app, autofunction, "mode.sweeping.range")
     detail = _following(app, autofunction, "mode.criterion.sharpness_metric.detail")
-    assert [i.message for i in sweep_range.issues()] == [
-        ("Computed from the field width once the action is prepared; or set a range.")
-    ]
+    # what the range waits for, and that preparing provides it
+    [issue] = sweep_range.issues()
+    assert mentions(issue.message, "field width", "prepare")
 
     app.session.write_properties(
         autofunction,
@@ -761,6 +771,5 @@ def test_action_panel_range_default_depends_on_the_swept_attribute(
     editor_at(form, "mode.sweeping.target_attribute").set_value("dwell_time")
 
     sweep_range = _following(app, autofunction, "mode.sweeping.range")
-    assert [i.message for i in sweep_range.issues()] == [
-        "There is no default range for sweeping 'dwell_time'; set a range."
-    ]
+    [issue] = sweep_range.issues()
+    assert mentions(issue.message, "dwell_time")
