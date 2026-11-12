@@ -51,6 +51,12 @@ class AutofunctionState(ActionState):
     # slice on which a run was requested that is still waiting for the linked
     # imaging to be free; None if no request is waiting
     queued_since: int | None = None
+    # the pending step-mode trial value, handed out to the linked imaging's
+    # next frame; None if no trial value is pending
+    trial_value: SweepPoint | None = None
+    # the linked imaging's `frame_slice` when the pending trial value was
+    # handed out; the trial is scored only on a newer frame
+    trial_frame_slice: int | None = None
 
 
 def _with_point_value(result: Any) -> Any:
@@ -127,6 +133,9 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
         # where the step-mode sweep in progress puts its trial values; None
         # while no step-mode sweep is in progress
         self._trial_target: _TrialTarget | None = None
+        # the pending trial value, and the imaging's frame slice when it was handed out
+        self._trial_value: SweepPoint | None = None
+        self._trial_frame_slice: int | None = None
 
         # slice of the run request waiting for the linked imaging
         self._queued_since: int | None = None
@@ -165,6 +174,8 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
             sweeps_done=self._runner.sweeps_done,
             last_direction=self._runner.last_direction,
             queued_since=self._queued_since,
+            trial_value=self._trial_value,
+            trial_frame_slice=self._trial_frame_slice,
         )
 
     @property
@@ -215,6 +226,8 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
 
         self._current_step_index = state.current_step_index
         self._queued_since = state.queued_since
+        self._trial_value = state.trial_value
+        self._trial_frame_slice = state.trial_frame_slice
         self._runner.restore(
             state.sweep_base_value,
             state.sweeps_done,
@@ -362,19 +375,71 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
         self._runner.wait()
 
     def _run_step(self) -> StepOutcome:
+        if self._trial_frame_missing():
+            # scoring the imaging's last frame would credit the pending trial
+            # value with the sharpness of a frame taken at another value
+            assert self._trial_target is not None and self._trial_value is not None
+            self._ctx.text_logger.warning(
+                f"'{self.name}' repeats its pending sweep step: "
+                f"'{self._trial_target.imaging.name}' has acquired no frame at "
+                "its trial value."
+            )
+            return self._handing_out(self._trial_value)
+
         if self._active_gen is None:
             self._start_sweep()
         trial = self._advance()
 
-        props = self.collect_properties()
         if trial is None:
-            return Produced(props)
+            self._trial_value = None
+            self._trial_frame_slice = None
+            return Produced(self.collect_properties())
 
-        # mid-sweep: the linked imaging must acquire its next frame at the trial value
+        assert self._trial_target is not None
+        self._trial_value = trial.value
+        self._trial_frame_slice = self._trial_target.imaging.frame_slice
+        return self._handing_out(trial.value)
+
+    def _handing_out(self, value: SweepPoint) -> Produced:
+        """
+        The outcome handing a trial value out to the linked imaging's next frame.
+
+        Args:
+            value: The values of the swept attributes, absolute, in the units
+                of the attributes (e.g. nm for the working distance).
+
+        Returns:
+            This autofunction's collected properties, with the patch of the imaging.
+        """
         patch = GlobalProperties()
-        for name, value in zip(self._runner.attributes, trial.value, strict=True):
-            patch.set_property(name, value, self.beam_type)
-        return Produced(props, patches={self._settings.linked_imaging: patch})
+        for name, attribute in zip(self._runner.attributes, value, strict=True):
+            patch.set_property(name, attribute, self.beam_type)
+        return Produced(
+            self.collect_properties(), patches={self._settings.linked_imaging: patch}
+        )
+
+    def _trial_frame_missing(self) -> bool:
+        """
+        Tell whether the linked imaging has acquired no frame at the pending trial value.
+
+        A step-mode trial value is handed out to the imaging's next frame, and
+        scored on the next run of this autofunction. If the imaging acquired
+        no frame meanwhile (it was skipped), its last frame was taken at
+        another value; the step is then repeated, handing the same value out
+        again.
+
+        Returns:
+            True while a step-mode trial value is pending and the imaging's
+            last frame is the one it had when the value was handed out. False
+            for a run restored from a state that does not record the value.
+        """
+        if (
+            self._active_gen is None
+            or self._trial_target is None
+            or self._trial_value is None
+        ):
+            return False
+        return self._trial_target.imaging.frame_slice == self._trial_frame_slice
 
     def _start_sweep(self) -> None:
         """
@@ -578,6 +643,8 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
         self._active_gen.close()
         self._active_gen = None
         self._trial_target = None
+        self._trial_value = None
+        self._trial_frame_slice = None
         self._current_step_index = 0
         self._runner.abort_sweep()
 

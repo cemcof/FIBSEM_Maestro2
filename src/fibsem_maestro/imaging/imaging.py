@@ -41,6 +41,8 @@ if TYPE_CHECKING:
 
 class ImagingState(ActionState):
     image_sharpness: float | None = None
+    # slice the last frame (and its sharpness) was acquired on; None if none was
+    frame_slice: int | None = None
 
 
 @ACTION_REGISTRY.register("imaging")
@@ -74,6 +76,8 @@ class Imaging(Action[ImagingSettings, ImagingState]):
 
         # save the last acquired image
         self._last_acquired_image: Image | None = None
+        # slice the last frame was acquired on; a skipped slice acquires none
+        self._frame_slice: int | None = None
 
     @classmethod
     def settings_cls(cls) -> type[ImagingSettings]:
@@ -87,6 +91,7 @@ class Imaging(Action[ImagingSettings, ImagingState]):
     def state(self) -> ImagingState:
         return ImagingState(
             image_sharpness=self._image_sharpness,
+            frame_slice=self._frame_slice,
         )
 
     @property
@@ -104,6 +109,7 @@ class Imaging(Action[ImagingSettings, ImagingState]):
 
     def set_state(self, state: ImagingState) -> None:
         self._image_sharpness = state.image_sharpness
+        self._frame_slice = state.frame_slice
 
         # skip if the acquisition hasn't started yet
         if self._ctx.slice == 0:
@@ -156,6 +162,20 @@ class Imaging(Action[ImagingSettings, ImagingState]):
         """Get the last image acquired by this imaging."""
         return self._last_acquired_image
 
+    @property
+    def frame_slice(self) -> int | None:
+        """
+        The slice the last frame, and so its sharpness, was acquired on.
+
+        A skipped slice acquires no frame and leaves this unchanged, so a
+        reader of the last frame can tell whether it is new.
+
+        Returns:
+            The slice, or None if no frame was acquired since the state was
+            last reset (or the state predates this record).
+        """
+        return self._frame_slice
+
     def _run_step(self) -> StepOutcome:
         self._ctx.frame_store.raise_if_exists(
             ImagingError,
@@ -166,6 +186,7 @@ class Imaging(Action[ImagingSettings, ImagingState]):
             self._last_acquired_image = self._microscope.beam.grab_frame(
                 self._ctx.frame_store
             )
+        self._frame_slice = self._ctx.slice
 
         # collected after the extended geometry is undone, so that the props
         # hold the base field of view and the base beam position

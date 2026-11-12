@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from fibsem_maestro.action.outcome import Produced
 from fibsem_maestro.action.registry import ACTION_REGISTRY
 from fibsem_maestro.action_context.file import FileActionContext
 from fibsem_maestro.autofunction import (
@@ -15,14 +16,17 @@ from fibsem_maestro.autofunction import (
     InterleavedSweepingStrategy,
 )
 from fibsem_maestro.autofunction.autofunction import Autofunction, AutofunctionState
+from fibsem_maestro.autofunction.autofunction_mode import StepMode
 from fibsem_maestro.autofunction.jobs_manager import JobsManager
 from fibsem_maestro.autofunction.result import AutofunctionResult
 from fibsem_maestro.autofunction.sweep_space import LinearSweepSpace
 from fibsem_maestro.autofunction.sweep_step import SweepPoint, SweepStep
 from fibsem_maestro.core.detail_band import DetailBand
 from fibsem_maestro.core.frequency import Every
+from fibsem_maestro.imaging.imaging import Imaging, ImagingState
 from fibsem_maestro.logging.text.contextual import ContextualTextLogger
 from fibsem_maestro.microscope.microscope import Microscope
+from fibsem_maestro.notifications.null_notifier import NullNotifier
 from fibsem_maestro.properties.beam_properties import BeamProperties
 from fibsem_maestro.properties.global_properties import GlobalProperties
 from fibsem_maestro.settings.autofunction_settings import BasicMode as BasicModeSettings
@@ -47,7 +51,9 @@ if TYPE_CHECKING:
 
     from fibsem_maestro.action.action import Action
     from fibsem_maestro.action.outcome import StepOutcome
+    from fibsem_maestro.autofunction.autofunction_context import AutofunctionContext
     from fibsem_maestro.autofunction.evaluation import BasicEvaluation
+    from fibsem_maestro.autofunction.jobs_manager import JobsManager as Jobs
 
 SPACE = LinearSweepSpace("working_distance", (-2.0, 2.0), 3)
 BASE: SweepPoint = (0.0,)
@@ -650,3 +656,161 @@ def test_step_autofunction_tells_whose_new_properties_would_abort_its_run(
 
     # nothing left to discard
     assert not autofunction.properties_would_discard_state(imaging)
+
+
+@pytest.fixture
+def scored(monkeypatch: pytest.MonkeyPatch) -> list[tuple[float, float | None]]:
+    """
+    Per step-mode step scored: its trial working distance, and that of the frame scored for it (nm).
+
+    The frame's working distance is None if the frame was not acquired by
+    this test's imagings (e.g. read from disk after a restart).
+    """
+    frame_wd: dict[int, float] = {}
+    pairs: list[tuple[float, float | None]] = []
+    run_step = Imaging._run_step
+    score = StepMode._score_last_frame
+
+    def acquiring(self: Imaging) -> StepOutcome:
+        outcome = run_step(self)
+        assert isinstance(outcome, Produced)
+        beam = outcome.props.electron_beam
+        assert beam is not None and beam.working_distance is not None
+        frame_wd[id(self.last_acquired_image)] = beam.working_distance
+        return outcome
+
+    def scoring(
+        ctx: AutofunctionContext, jobs: Jobs, imaging: Imaging, step: SweepStep
+    ) -> None:
+        pairs.append((step.value[0], frame_wd.get(id(imaging.last_acquired_image))))
+        score(ctx, jobs, imaging, step)
+
+    monkeypatch.setattr(Imaging, "_run_step", acquiring)
+    monkeypatch.setattr(StepMode, "_score_last_frame", staticmethod(scoring))
+    return pairs
+
+
+def _skipped_on(monkeypatch: pytest.MonkeyPatch, action: Action, slice_: int) -> None:
+    """Make the action skip the given slice, as Skip in the error dialog would."""
+    should_execute = action.should_execute
+    monkeypatch.setattr(
+        action,
+        "should_execute",
+        lambda: action.ctx.slice != slice_ and should_execute(),
+    )
+
+
+def _imaging_and_step_af(
+    add_action: Callable[..., Action],
+    add_step_af: Callable[..., Autofunction],
+    imaging_first: bool,
+) -> tuple[Action, Autofunction]:
+    """An imaging collecting the working distance, and a step-mode autofunction on it."""
+    autofunction = add_step_af("af")
+    imaging = add_action(
+        "imaging",
+        "imaging",
+        index=0 if imaging_first else None,
+        properties_to_collect=PropertyNames(electron_beam=["working_distance"]),
+    )
+    return imaging, autofunction
+
+
+@pytest.mark.parametrize("imaging_first", [False, True])
+def test_step_autofunction_repeats_the_step_whose_frame_was_skipped(
+    workflow: Workflow,
+    add_action: Callable[..., Action],
+    add_step_af: Callable[..., Autofunction],
+    scored: list[tuple[float, float | None]],
+    monkeypatch: pytest.MonkeyPatch,
+    imaging_first: bool,
+) -> None:
+    imaging, autofunction = _imaging_and_step_af(add_action, add_step_af, imaging_first)
+    # mid-sweep: a trial value was handed out on the slice before
+    _skipped_on(monkeypatch, imaging, 2)
+
+    history = _run(workflow, STEPS + 3, autofunction)
+
+    # every step scored once, each on a frame taken at its own trial value
+    assert len(scored) == STEPS
+    for trial, frame in scored:
+        assert frame == pytest.approx(trial)
+    # the run is over, one slice later than it would have been
+    assert not autofunction.run_in_progress
+    assert len(_running_slices(history, 0)) == STEPS + 1
+
+
+def test_step_autofunction_repeated_step_hands_its_trial_value_out_again(
+    workflow: Workflow,
+    add_action: Callable[..., Action],
+    add_step_af: Callable[..., Autofunction],
+    scored: list[tuple[float, float | None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # every slice, the correction shifts the working distance in the imaging's
+    # upcoming properties, also the trial value carried over by the skip
+    add_action(
+        "post_milling_correction",
+        "correction",
+        corrected_actions=["imaging"],
+        y_correction=0.0,
+        wd_correction=50.0,
+    )
+    imaging, autofunction = _imaging_and_step_af(add_action, add_step_af, False)
+    _skipped_on(monkeypatch, imaging, 2)
+
+    _run(workflow, STEPS + 3, autofunction)
+
+    # as in an uninterrupted run, each frame is taken at its trial value
+    assert len(scored) == STEPS
+    for trial, frame in scored:
+        assert frame == pytest.approx(trial)
+
+
+def test_step_autofunction_repeats_the_skipped_step_after_a_restart(
+    workflow: Workflow,
+    add_action: Callable[..., Action],
+    add_step_af: Callable[..., Autofunction],
+    scored: list[tuple[float, float | None]],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    imaging, autofunction = _imaging_and_step_af(add_action, add_step_af, False)
+    _skipped_on(monkeypatch, imaging, 2)
+    _run(workflow, 2, autofunction)
+    assert autofunction.run_in_progress
+
+    reloaded = Workflow.import_from_dir_with_state(tmp_path, NullNotifier())
+    af = reloaded.actions.named("af")
+    assert isinstance(af, Autofunction)
+    _run(reloaded, STEPS + 2, af)
+
+    assert len(scored) == STEPS
+    for trial, frame in scored:
+        assert frame == pytest.approx(trial)
+    assert not af.run_in_progress
+
+
+def test_imaging_frame_slice_survives_saving_the_state_and_a_skip(
+    workflow: Workflow,
+    add_action: Callable[..., Action],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    imaging = add_action("imaging", "imaging")
+    assert isinstance(imaging, Imaging)
+    _skipped_on(monkeypatch, imaging, 2)
+
+    _run_slice(workflow)
+    assert imaging.frame_slice == 1
+    _run_slice(workflow)
+    # skipped: still the frame of slice 1
+    assert imaging.frame_slice == 1
+    stored = imaging.ctx.state_store.read("state.yaml", ImagingState)
+    assert stored.frame_slice == 1
+
+
+def test_imaging_state_saved_without_a_frame_slice_still_loads(tmp_path: Path) -> None:
+    file = tmp_path / "state.yaml"
+    file.write_text("image_sharpness: 0.5\n")
+
+    assert ImagingState.from_file(file).frame_slice is None
