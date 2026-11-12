@@ -1,14 +1,15 @@
 # Released under GPL-3.0 License.
 # Copyright (c) 2024-2026 CEMCOF
 
-"""A collapsible group box around a nested object or union editor."""
+"""A collapsible card around a nested object or union editor."""
 
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
-from PyQt6.QtWidgets import QSizePolicy, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QSizePolicy, QWidget
 
 from fibsem_maestro.ui.forms.editor import FieldEditor
 from fibsem_maestro.ui.forms.editors.collapsible_box import CollapsibleGroupBox
+from fibsem_maestro.ui.forms.editors.union import DiscriminatedUnionWidget
 
 if TYPE_CHECKING:
     from PyQt6.QtCore import QSize
@@ -19,7 +20,11 @@ T = TypeVar("T")
 
 class GroupWrapper(CollapsibleGroupBox, FieldEditor[T]):
     """
-    Plain (non-checkable) QGroupBox wrapping an ObjectWidget for required nested objects.
+    A card wrapping the editor of a nested object or union.
+
+    The card's title is the field's label (`ObjectWidget.add_field` places it
+    there with `set_title_label`). A union shows its variants' radio buttons
+    on the title line, after the title, instead of above its pages.
 
     The box never grows taller than its content needs (vertical policy
     `Maximum`), so a form given spare height does not stretch its frames.
@@ -37,13 +42,14 @@ class GroupWrapper(CollapsibleGroupBox, FieldEditor[T]):
         FieldEditor.__init__(self)
         self._inner = inner
 
-        layout = QVBoxLayout(self)
-        layout.addWidget(cast("QWidget", inner))
-        layout.addStretch()
+        self._set_body(cast("QWidget", inner))
+        if isinstance(inner, DiscriminatedUnionWidget):
+            for button in inner.take_selector():
+                self.add_header_widget(button)
+            # a variant without fields leaves only the title line
+            inner.on_change(self._on_variant_changed)
+            self._on_variant_changed()
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
-
-    def _collapse_body(self) -> QWidget:
-        return cast("QWidget", self._inner)
 
     def sizeHint(self) -> QSize:
         """
@@ -70,6 +76,12 @@ class GroupWrapper(CollapsibleGroupBox, FieldEditor[T]):
         super().resizeEvent(a0)
         if a0 is not None and a0.size().width() != a0.oldSize().width():
             self.updateGeometry()
+
+    def _on_variant_changed(self, *_: object) -> None:
+        """Hide the body while the selected variant has no fields."""
+        inner = self._inner
+        if isinstance(inner, DiscriminatedUnionWidget):
+            self.set_body_empty(inner.selected_variant_widget() is None)
 
     def get_value(self) -> T:
         """

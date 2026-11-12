@@ -133,7 +133,9 @@ class ActionListItem(QWidget):
 
         # name label (double-click to edit)
         self._name_label = DoubleClickLabel(data.name)
-        self._name_label.setStyleSheet("font-weight: bold;")
+        # transparent: qdarkstyle paints labels in the window colour, which shows as a
+        # box on the selected row
+        self._name_label.setStyleSheet("font-weight: bold; background: transparent;")
         self._name_label.double_clicked.connect(self._start_name_edit)
         name_row.addWidget(self._name_label)
 
@@ -146,7 +148,9 @@ class ActionListItem(QWidget):
 
         # propagation badge
         self._badge = QLabel()
-        self._badge.setStyleSheet("color: #5a9fd4; font-size: 11px;")
+        self._badge.setStyleSheet(
+            "color: #5a9fd4; font-size: 11px; background: transparent;"
+        )
         name_row.addWidget(self._badge)
 
         name_row.addStretch()
@@ -154,7 +158,9 @@ class ActionListItem(QWidget):
 
         # type + beam subtitle
         self._subtitle_label = QLabel(data.subtitle)
-        self._subtitle_label.setStyleSheet("color: #888888; font-size: 10px;")
+        self._subtitle_label.setStyleSheet(
+            "color: #888888; font-size: 10px; background: transparent;"
+        )
         text_layout.addWidget(self._subtitle_label)
 
         layout.addLayout(text_layout)

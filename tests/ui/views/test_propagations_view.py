@@ -17,12 +17,12 @@ from gui_testkit.driving import (
     panel_of,
     rename_inline,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtWidgets import QListWidget
 
 from fibsem_maestro.action.registry import ACTION_REGISTRY
 from fibsem_maestro.ui.app.run_state import AppState
-from fibsem_maestro.ui.forms.editors.collapsible_box import ClickableLabel
+from fibsem_maestro.ui.forms.editors.field_label import FieldLabel
 from fibsem_maestro.ui.forms.editors.multi_select import MultiSelectWidget
 
 if TYPE_CHECKING:
@@ -63,14 +63,8 @@ def select_dependent(editor: RuleEditor, name: str) -> None:
 
 
 def collapse(editor: RuleEditor) -> None:
-    """Click the rule's ⯆ toggle (the clickable label in the rule's own frame)."""
-    (toggle,) = [
-        label
-        for label in children(editor, ClickableLabel)
-        if (frame := label.parentWidget()) is not None
-        and frame.parentWidget() is editor
-    ]
-    toggle.clicked.emit()
+    """Click the chevron on the rule card's title line."""
+    editor.toggle.clicked.emit()
 
 
 def test_propagations_add_rule_shows_an_empty_rule_that_stays(app: Composition) -> None:
@@ -106,6 +100,50 @@ def test_propagations_dependents_selection_reaches_the_session(
     (rule,) = app.session.rules_of(parent)
     assert rule.dependent_names == ["child"]
     assert item_of(app, parent).badge.text() == "→1"
+
+
+def test_propagations_rule_card_is_titled_by_its_dependents(app: Composition) -> None:
+    parent = app.commands.add_action(ANY_TYPE, "parent")
+    app.commands.add_action(ANY_TYPE, "child")
+    editor = rules_editor(app, parent)
+    editor.add_button.click()
+    (rule_editor,) = editor.rule_editors
+    assert "child" not in rule_editor.title_label.text()
+
+    select_dependent(rule_editor, "child")
+
+    title = rule_editor.title_label.text()
+    assert "parent" in title
+    assert "child" in title
+
+
+def test_propagations_dependents_label_starts_in_line_with_the_properties_title(
+    app: Composition, qtbot: QtBot
+) -> None:
+    parent = app.commands.add_action(ANY_TYPE, "parent")
+    editor = rules_editor(app, parent)
+    editor.add_button.click()
+    (rule_editor,) = editor.rule_editors
+    app.window.show()
+    qtbot.waitExposed(app.window)
+    qtbot.wait(20)
+    assert rule_editor.isVisible()
+    dependents = next(
+        label
+        for label in children(rule_editor, FieldLabel)
+        if label.text() == "dependents"
+    )
+    properties = next(
+        label
+        for label in children(rule_editor, FieldLabel)
+        if label.text() == "properties"
+    )
+
+    def text_left(label: FieldLabel) -> int:
+        return label.mapTo(rule_editor, QPoint(label.contentsRect().left(), 0)).x()
+
+    # right-aligned, it sat far right of the title below it
+    assert text_left(dependents) == text_left(properties)
 
 
 def test_propagations_properties_selection_reaches_the_session(

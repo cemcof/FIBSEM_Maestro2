@@ -773,3 +773,15 @@ def test_action_panel_range_default_depends_on_the_swept_attribute(
     sweep_range = _following(app, autofunction, "mode.sweeping.range")
     [issue] = sweep_range.issues()
     assert mentions(issue.message, "dwell_time")
+
+
+def test_action_panel_header_names_the_type_and_beam(app: Composition) -> None:
+    action = app.commands.add_action("imaging", "frames")
+    app.window.action_list.select(action)
+
+    header = panel_of(app, action).header
+
+    assert header.name_label.text() == "frames"
+    subtitle = header.subtitle_label.text()
+    assert "imaging" in subtitle
+    assert str(action.beam_type) in subtitle

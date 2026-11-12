@@ -3,23 +3,34 @@
 
 """Editor of an object's fields, laid out as a labelled grid."""
 
+from __future__ import annotations
+
 import dataclasses
 from dataclasses import dataclass
 from functools import partial
 from html import escape
-from typing import Any, TypeVar, cast
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from pydantic import BaseModel, ValidationError
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QGridLayout, QLabel, QWidget
+from PyQt6.QtWidgets import QWIDGETSIZE_MAX, QGridLayout, QLabel, QWidget
 
 from fibsem_maestro.ui.forms.editor import FieldEditor
+from fibsem_maestro.ui.forms.editors.collapsible_box import (
+    TITLE_TEXT_OFFSET,
+    CollapsibleGroupBox,
+)
 from fibsem_maestro.ui.forms.editors.field_label import FieldLabel
+from fibsem_maestro.ui.forms.editors.optional import OptionalWidget
 from fibsem_maestro.ui.forms.issues import (
     FieldIssue,
     FieldValidationError,
     Severity,
 )
+from fibsem_maestro.ui.forms.style import CARD_INDENT
+
+if TYPE_CHECKING:
+    from PyQt6.QtGui import QShowEvent
 
 T = TypeVar("T")
 
@@ -32,14 +43,24 @@ RESETS_STATE_MARK = "R"
 RESETS_STATE_NOTE = "Changing this resets the action's internal state."
 """Added to the tooltip of a field whose change resets the action's internal state."""
 
-_RESETS_STATE_COLOR = "#8fa6b8"
-"""A quiet grey: the mark informs, it is not a control."""
+_RESETS_STATE_COLOR = "#9FCBF2"
+"""Light blue on qdarkstyle's darkest accent: the mark informs, it is not a control."""
+
+_RESETS_STATE_BACKGROUND = "#26486B"
+"""qdarkstyle's first accent, behind the mark."""
 
 RESETS_STATE_MARK_HTML = (
-    f'<span style="color: {_RESETS_STATE_COLOR}; font-size: 7pt; font-weight: bold;">'
-    f"{RESETS_STATE_MARK}</span>"
+    f'<span style="color: {_RESETS_STATE_COLOR}; '
+    f"background-color: {_RESETS_STATE_BACKGROUND}; "
+    f'font-size: 7pt; font-weight: bold;">&nbsp;{RESETS_STATE_MARK}&nbsp;</span>'
 )
-"""The mark as appended to the label's rich text."""
+"""The mark as appended to the label's rich text, as a small pill."""
+
+LABEL_ROW_HEIGHT = 26
+"""Height of a field's label (px): that of a one-line input, so the label sits level with its first line."""
+
+_COLUMN_SPACING = 12
+"""Space between the labels and the editors (px)."""
 
 
 @dataclass(frozen=True)
@@ -51,10 +72,15 @@ class _FieldRow:
         label: The field's label, coloured while the field has issues.
         message: The line below the editor describing the issues; hidden while
             there are none.
+        base_style: The label's style without issues (a group's title is bold).
+        in_column: Whether the label is in the label column; a group's label
+            is the title of its card instead.
     """
 
     label: FieldLabel
     message: QLabel
+    base_style: str
+    in_column: bool
 
 
 def _model_to_dict(value: Any) -> dict[str, Any] | None:
@@ -100,6 +126,16 @@ class ObjectWidget(QWidget, FieldEditor[T]):
     (see `FieldEditor.set_issue`). A field with issues also has its label
     coloured by the most severe one.
 
+    A group (a nested object or union, optional or not) spans both columns:
+    its label is the title of its card, on the card's first line.
+
+    Labels stay on one line, level with the first line of their editor, and
+    start where the titles of the cards beside them do (`TITLE_TEXT_OFFSET`),
+    so an object's labels and titles form one column of text. The editors of
+    a form start on one column, however deeply nested: the root object
+    editor aligns the label columns of all object editors in it when it is
+    shown (`align_label_columns`).
+
     Args:
         cls: The dataclass or model type to construct from the field values.
         parent: The parent widget, if any.
@@ -115,7 +151,8 @@ class ObjectWidget(QWidget, FieldEditor[T]):
         self._cls = cls
         self._layout = QGridLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
-        self._layout.setSpacing(4)
+        self._layout.setHorizontalSpacing(_COLUMN_SPACING)
+        self._layout.setVerticalSpacing(4)
         self._layout.setColumnStretch(1, 1)
         self._fields: dict[str, FieldEditor[Any]] = {}
         self._rows: dict[str, _FieldRow] = {}
@@ -142,10 +179,10 @@ class ObjectWidget(QWidget, FieldEditor[T]):
         """
 
         label_widget = FieldLabel(label, widget.highlight_target())
-        label_widget.setWordWrap(True)
         label_widget.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         )
+        label_widget.setMinimumHeight(LABEL_ROW_HEIGHT)
         if resets_state:
             label_widget.setTextFormat(Qt.TextFormat.RichText)
             label_widget.setText(f"{escape(label)} {RESETS_STATE_MARK_HTML}")
@@ -158,14 +195,40 @@ class ObjectWidget(QWidget, FieldEditor[T]):
         message.setTextFormat(Qt.TextFormat.RichText)
         message.hide()
 
-        self._layout.addWidget(label_widget, self._row_count, 0)
-        self._layout.addWidget(cast("QWidget", widget), self._row_count, 1)
-        # a row holding only a hidden widget takes no space
-        self._layout.addWidget(message, self._row_count + 1, 1)
+        group = _group_of(widget)
+        if group is not None:
+            # the label is the card's title; the card spans both columns
+            group.set_title_label(label_widget)
+            self._layout.addWidget(cast("QWidget", widget), self._row_count, 0, 1, 2)
+            self._layout.addWidget(message, self._row_count + 1, 0, 1, 2)
+        else:
+            # in line with the titles of the cards beside it
+            label_widget.setContentsMargins(TITLE_TEXT_OFFSET, 0, 0, 0)
+            self._layout.addWidget(
+                label_widget, self._row_count, 0, Qt.AlignmentFlag.AlignTop
+            )
+            editor = cast("QWidget", widget)
+            # an editor of limited width sits at the left of its cell; placed
+            # unaligned, it would cap the editor column, and the label column
+            # would take the spare width and push the editors off the common column
+            limited = editor.maximumWidth() < QWIDGETSIZE_MAX
+            self._layout.addWidget(
+                editor,
+                self._row_count,
+                1,
+                Qt.AlignmentFlag.AlignLeft if limited else Qt.AlignmentFlag(0),
+            )
+            # a row holding only a hidden widget takes no space
+            self._layout.addWidget(message, self._row_count + 1, 1)
         self._row_count += 2
 
         self._fields[name] = widget
-        self._rows[name] = _FieldRow(label_widget, message)
+        self._rows[name] = _FieldRow(
+            label_widget,
+            message,
+            base_style=label_widget.styleSheet(),
+            in_column=group is None,
+        )
         widget.on_issues_changed(partial(self._show_issues, name))
         # issues the editor reported while it was built
         self._show_issues(name)
@@ -181,7 +244,7 @@ class ObjectWidget(QWidget, FieldEditor[T]):
         row = self._rows[name]
 
         if not issues:
-            row.label.setStyleSheet("")
+            row.label.setStyleSheet(row.base_style)
             row.message.clear()
             row.message.hide()
             return
@@ -189,8 +252,46 @@ class ObjectWidget(QWidget, FieldEditor[T]):
         # errors first, each line in its own severity's colour
         ordered = sorted(issues, key=lambda issue: issue.severity is not Severity.ERROR)
         row.message.setText("<br>".join(_issue_html(issue) for issue in ordered))
-        row.label.setStyleSheet(f"color: {_ISSUE_COLORS[ordered[0].severity]};")
+        row.label.setStyleSheet(
+            f"{row.base_style} color: {_ISSUE_COLORS[ordered[0].severity]};"
+        )
         row.message.show()
+
+    def natural_label_width(self) -> int:
+        """
+        The width the labels of this object's field rows need on one line.
+
+        Returns:
+            The widest label's width (px); 0 without labelled rows (e.g. only groups).
+        """
+        return max(
+            (
+                row.label.sizeHint().width()
+                for row in self._rows.values()
+                if row.in_column
+            ),
+            default=0,
+        )
+
+    def set_label_column(self, width: int) -> None:
+        """
+        Make the label column at least this wide, so the editors start on a common column.
+
+        Args:
+            width: The minimum width of the label column (px).
+        """
+        self._layout.setColumnMinimumWidth(0, width)
+
+    def showEvent(self, a0: QShowEvent | None) -> None:
+        """
+        Align the label columns of the whole form when its root is shown.
+
+        Args:
+            a0: The show event.
+        """
+        super().showEvent(a0)
+        if not _has_object_ancestor(self):
+            align_label_columns(self)
 
     def has_errors(self) -> bool:
         """
@@ -338,3 +439,84 @@ class ObjectWidget(QWidget, FieldEditor[T]):
         _ = all_variants
         child = self._fields.get(name)
         return [] if child is None else [child.value_editor()]
+
+
+def _group_of(widget: FieldEditor[Any]) -> CollapsibleGroupBox | None:
+    """
+    The card of a group field's editor, which shows the field's label as its title.
+
+    Args:
+        widget: The editor placed in the field's row.
+
+    Returns:
+        The editor itself if it is a card, the gated card of an optional
+        group, or None for any other editor.
+    """
+    if isinstance(widget, CollapsibleGroupBox):
+        return widget
+    if isinstance(widget, OptionalWidget):
+        return widget.group
+    return None
+
+
+def _has_object_ancestor(widget: QWidget) -> bool:
+    """Whether the widget is inside another object editor (it is not the root of a form)."""
+    parent = widget.parentWidget()
+    while parent is not None:
+        if isinstance(parent, ObjectWidget):
+            return True
+        parent = parent.parentWidget()
+    return False
+
+
+def _indent(widget: QWidget, root: QWidget) -> int:
+    """
+    How much further right than `root` the content of `widget` starts (px).
+
+    Every card between them indents by its inset and border; the other
+    containers of a form (union, optional and object editors) have no margins.
+
+    Args:
+        widget: A widget inside `root`.
+        root: The form's root object editor.
+
+    Returns:
+        The indent.
+    """
+    indent = 0
+    parent = widget.parentWidget()
+    while parent is not None and parent is not root:
+        if isinstance(parent, CollapsibleGroupBox):
+            indent += CARD_INDENT
+        parent = parent.parentWidget()
+    return indent
+
+
+def align_label_columns(root: ObjectWidget[Any]) -> None:
+    """
+    Make every editor of a form start on one column, and every card's variants with them.
+
+    The column is where the widest label ends, its object editor's indent
+    included. Each object editor's label column is widened to reach it, and
+    each card's title block too, so that the variants on its title line
+    start where the editors do.
+
+    Args:
+        root: The form's root object editor.
+    """
+    objects = [root, *root.findChildren(ObjectWidget)]
+    indents = {id(obj): _indent(obj, root) for obj in objects}
+    column = max(
+        (
+            obj.natural_label_width() + indents[id(obj)]
+            for obj in objects
+            if obj.natural_label_width() > 0
+        ),
+        default=0,
+    )
+    if column == 0:
+        return
+    for obj in objects:
+        obj.set_label_column(column - indents[id(obj)])
+    for card in root.findChildren(CollapsibleGroupBox):
+        card.set_title_column(max(0, column - _indent(card, root) - CARD_INDENT))

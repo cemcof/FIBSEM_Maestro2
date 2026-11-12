@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 from fibsem_maestro.ui.forms.editor import FieldEditor
 from fibsem_maestro.ui.forms.editors.object import ObjectWidget
 from fibsem_maestro.ui.forms.issues import FieldValidationError
+from fibsem_maestro.ui.forms.style import VARIANT_SPACING
 from fibsem_maestro.ui.schema.labels import class_name_to_label
 from fibsem_maestro.ui.schema.schema import get_field_infos
 
@@ -89,7 +90,10 @@ class DiscriminatedUnionWidget(QWidget, FieldEditor[Any]):
         descriptions = descriptions or {}
 
         self._button_group = QButtonGroup(self)
+        self._show_selector = show_selector
         radio_row = QHBoxLayout()
+        radio_row.setSpacing(VARIANT_SPACING)
+        self._radio_row = radio_row
 
         for i, (disc_value, variant_cls) in enumerate(variants):
             self._discriminator_values.append(disc_value)
@@ -127,7 +131,8 @@ class DiscriminatedUnionWidget(QWidget, FieldEditor[Any]):
             layout.addWidget(variant_widget)
             variant_widget.hide()
 
-        # radio buttons on top, variant widgets below
+        # radio buttons on top, packed to the left, variant widgets below
+        radio_row.addStretch()
         layout.insertLayout(0, radio_row)
 
         first_btn = self._button_group.button(0)
@@ -136,6 +141,37 @@ class DiscriminatedUnionWidget(QWidget, FieldEditor[Any]):
             self._on_selection_changed(0)
 
         self._button_group.idClicked.connect(self._on_selection_changed)
+
+    def variant_buttons(self) -> list[QRadioButton]:
+        """
+        Return the radio buttons, wherever they are shown.
+
+        Returns:
+            One button per variant, in variant order (hidden without a selector).
+        """
+        return cast("list[QRadioButton]", self._button_group.buttons())
+
+    def take_selector(self) -> list[QRadioButton]:
+        """
+        Hand the radio buttons over to be shown elsewhere, e.g. on a card's title line.
+
+        The buttons stay in the button group, so selecting works as before.
+        Without a selector (`show_selector=False`) nothing is handed over, and
+        the hidden buttons stay in this widget.
+
+        Returns:
+            The radio buttons, in variant order; the caller places them in its
+            own layout. Empty if the selector is not shown.
+        """
+        if not self._show_selector:
+            return []
+        buttons = self.variant_buttons()
+        for button in buttons:
+            self._radio_row.removeWidget(button)
+        # the empty row would still take its spacing
+        if (layout := self.layout()) is not None:
+            layout.removeItem(self._radio_row)
+        return buttons
 
     def _on_selection_changed(self, index: int) -> None:
         """

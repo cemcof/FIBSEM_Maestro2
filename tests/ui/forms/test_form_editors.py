@@ -195,7 +195,8 @@ def test_union_offers_a_radio_button_per_variant_with_its_description(
 ) -> None:
     form = live_form(KitchenSink())
     union = _union(form, "shape")
-    radios = children(union, QRadioButton, direct_only=True)
+    # shown on the title line of the union's card
+    radios = union.variant_buttons()
 
     assert [(r.text(), r.toolTip()) for r in radios] == [
         ("circle shape", "A round shape."),

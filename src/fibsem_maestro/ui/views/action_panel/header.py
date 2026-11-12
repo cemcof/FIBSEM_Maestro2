@@ -11,6 +11,12 @@ from typing import TYPE_CHECKING
 from PyQt6.QtCore import QObject, Qt, pyqtSignal
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout
 
+from fibsem_maestro.ui.forms.style import (
+    BORDER_COLOR,
+    CARD_COLORS,
+    CARD_RADIUS,
+    MUTED_TEXT_COLOR,
+)
 from fibsem_maestro.ui.schema.labels import class_name_to_label
 from fibsem_maestro.ui.widgets.icon_button import IconButton
 from fibsem_maestro.ui.widgets.icons import ICON_RESET_STATE
@@ -20,6 +26,22 @@ RESET_STATE_TOOLTIP = (
     "Discard the action's internal state. The settings, the "
     "stored properties and the slice are kept."
 )
+
+_HEADER_OBJECT_NAME = "actionHeader"
+_STRIP_OBJECT_NAME = "toolStrip"
+
+_HEADER_STYLESHEET = f"""
+    QFrame#{_HEADER_OBJECT_NAME} {{
+        border: none;
+        border-bottom: 1px solid {BORDER_COLOR};
+    }}
+    QFrame#{_STRIP_OBJECT_NAME} {{
+        background-color: {CARD_COLORS["a"][0]};
+        border: 1px solid {BORDER_COLOR};
+        border-radius: {CARD_RADIUS}px;
+    }}
+"""
+"""A divider below the header instead of a frame around it; the tools in a rounded strip."""
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -35,9 +57,9 @@ class ActionHeaderViewData:
     What an action panel's header shows.
 
     Attributes:
-        name: The action's name (15 px bold).
-        type_text: "   > type: <type label>".
-        beam_text: "   > beam: <beam or —>".
+        name: The action's name (17 px bold).
+        type_text: The type's label, e.g. "autofunction".
+        beam_text: The beam, e.g. "electron", or "—" for none.
         tools_enabled: Whether each tool button is enabled, by `ToolSpec.key`.
         reset_enabled: Whether the Reset state button is enabled.
     """
@@ -76,8 +98,8 @@ def action_header_view(
     beam = str(action.beam_type) if action.beam_type is not None else "—"
     return ActionHeaderViewData(
         name=action.name,
-        type_text=f"   > type: {class_name_to_label(type(action).__name__)}",
-        beam_text=f"   > beam: {beam}",
+        type_text=class_name_to_label(type(action).__name__),
+        beam_text=beam,
         tools_enabled={
             tool.key: (
                 (
@@ -98,13 +120,12 @@ def action_header_view(
 
 class ActionHeader(QObject):
     """
-    Header frame: name, type and beam labels, with the tool buttons beside them.
+    Header: the name above "type · beam", the tool buttons beside them in one strip.
 
-    The Reset state button sits apart at the right end, behind a divider: it
-    discards what the action has done, unlike the tools.
+    The Reset state button sits apart at the right end: it discards what the
+    action has done, unlike the tools. A divider line runs below the header.
 
-    The frame itself is a plain `QFrame` (`frame`): the application style sheet
-    draws the styled-panel border of a plain `QFrame` but not of a subclass.
+    The header is a plain `QFrame` (`frame`), styled by its object name.
 
     Args:
         tools: The tools, in button order.
@@ -126,28 +147,31 @@ class ActionHeader(QObject):
     ) -> None:
         super().__init__(parent)
         self._frame = QFrame()
-        self._frame.setFrameShape(QFrame.Shape.StyledPanel)
+        self._frame.setObjectName(_HEADER_OBJECT_NAME)
+        self._frame.setStyleSheet(_HEADER_STYLESHEET)
         header_layout = QHBoxLayout(self._frame)
-        header_layout.setContentsMargins(8, 6, 8, 6)
+        header_layout.setContentsMargins(4, 2, 4, 10)
         header_layout.setSpacing(0)
 
         labels_layout = QVBoxLayout()
         labels_layout.setSpacing(2)
 
         self._name_label = QLabel(data.name)
-        self._name_label.setStyleSheet("font-size: 15px; font-weight: bold;")
+        self._name_label.setStyleSheet("font-size: 17px; font-weight: bold;")
         labels_layout.addWidget(self._name_label)
 
-        self._type_label = QLabel(data.type_text)
-        self._type_label.setStyleSheet("font-size: 11px; color: #888888;")
-        labels_layout.addWidget(self._type_label)
-
-        self._beam_label = QLabel(data.beam_text)
-        self._beam_label.setStyleSheet("font-size: 11px; color: #888888")
-        labels_layout.addWidget(self._beam_label)
+        # "type · beam", as below the name in the action list
+        self._subtitle_label = QLabel(_subtitle(data))
+        self._subtitle_label.setStyleSheet(
+            f"font-size: 12px; color: {MUTED_TEXT_COLOR};"
+        )
+        labels_layout.addWidget(self._subtitle_label)
 
         self._buttons: dict[str, IconButton] = {}
-        buttons_layout = QHBoxLayout()
+        strip = QFrame()
+        strip.setObjectName(_STRIP_OBJECT_NAME)
+        buttons_layout = QHBoxLayout(strip)
+        buttons_layout.setContentsMargins(4, 3, 4, 3)
         buttons_layout.setSpacing(4)
         for tool in tools:
             button = IconButton(tool.icon, tool.tooltip, tool.accessible_name)
@@ -155,20 +179,16 @@ class ActionHeader(QObject):
             self._buttons[tool.key] = button
             buttons_layout.addWidget(button, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        divider = QFrame()
-        divider.setFrameShape(QFrame.Shape.VLine)
-        divider.setFrameShadow(QFrame.Shadow.Sunken)
         self._reset_button = IconButton(
             ICON_RESET_STATE, RESET_STATE_TOOLTIP, "Reset internal state"
         )
         self._reset_button.clicked.connect(self.reset_clicked)
 
         header_layout.addLayout(labels_layout)
-        header_layout.addSpacing(50)
-        header_layout.addLayout(buttons_layout)
+        header_layout.addSpacing(32)
+        header_layout.addWidget(strip, 0, Qt.AlignmentFlag.AlignVCenter)
+        strip.setVisible(bool(tools))
         header_layout.addStretch(1)
-        header_layout.addWidget(divider)
-        header_layout.addSpacing(4)
         header_layout.addWidget(self._reset_button, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.render_data(data)
@@ -184,9 +204,9 @@ class ActionHeader(QObject):
         return self._name_label
 
     @property
-    def beam_label(self) -> QLabel:
-        """The label showing the action's beam."""
-        return self._beam_label
+    def subtitle_label(self) -> QLabel:
+        """The label showing the action's type and beam."""
+        return self._subtitle_label
 
     @property
     def reset_button(self) -> IconButton:
@@ -201,8 +221,7 @@ class ActionHeader(QObject):
             data: What to show.
         """
         self._name_label.setText(data.name)
-        self._type_label.setText(data.type_text)
-        self._beam_label.setText(data.beam_text)
+        self._subtitle_label.setText(_subtitle(data))
         for key, button in self._buttons.items():
             button.setEnabled(data.tools_enabled.get(key, False))
         self._reset_button.setEnabled(data.reset_enabled)
@@ -228,3 +247,8 @@ class ActionHeader(QObject):
             if button is sender:
                 self.tool_clicked.emit(key)
                 return
+
+
+def _subtitle(data: ActionHeaderViewData) -> str:
+    """The line below the name: "type · beam"."""
+    return f"{data.type_text}  ·  {data.beam_text}"

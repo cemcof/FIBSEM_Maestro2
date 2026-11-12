@@ -25,6 +25,8 @@ class PropagationsEditor(CollapsibleGroupBox):
     """
     Editable list of the propagation rules of a single parent action.
 
+    A section of the panel: a title with a divider line, then one card per rule.
+
     Shows one `RuleEditor` per rule of the action, matched to the rules by
     identity: when the rules change, editors of new rules are added, editors of
     deleted rules removed, and the others kept (with their collapse state).
@@ -47,8 +49,7 @@ class PropagationsEditor(CollapsibleGroupBox):
         form_context: FormContext,
         parent: QWidget | None = None,
     ) -> None:
-        super().__init__("Propagations", parent)
-        self.setStyleSheet("QGroupBox::title { padding-left: 15px; }")
+        super().__init__("Propagations", parent, section=True)
         self._action = action
         self._session = session
         self._commands = commands
@@ -58,13 +59,11 @@ class PropagationsEditor(CollapsibleGroupBox):
         self._read_only = False
 
         # body container so the toggle can hide rules + button together
-        self._body = QWidget()
-        self._layout = QVBoxLayout(self._body)
-        self._layout.setSpacing(10)
-
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 20, 0, 0)
-        outer.addWidget(self._body)
+        body = QWidget()
+        self._layout = QVBoxLayout(body)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(8)
+        self._set_body(body)
 
         self._add_btn = QPushButton("+ Add rule")
         self._add_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -96,9 +95,6 @@ class PropagationsEditor(CollapsibleGroupBox):
             editor.set_read_only(read_only)
 
         self._add_btn.setDisabled(read_only)
-
-    def _collapse_body(self) -> QWidget:
-        return self._body
 
     def _reconcile(self) -> None:
         """Match the editors to the action's rules, by identity."""

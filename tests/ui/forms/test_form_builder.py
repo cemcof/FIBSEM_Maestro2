@@ -50,9 +50,26 @@ if TYPE_CHECKING:
     from fibsem_maestro.ui.forms.builder import Form, FormBuilder
 
 
+def _owner(label: QWidget) -> QWidget | None:
+    """The object editor whose row the label belongs to: its nearest enclosing one."""
+    parent = label.parentWidget()
+    while parent is not None and not isinstance(parent, ObjectWidget):
+        parent = parent.parentWidget()
+    return parent
+
+
 def _row_labels(form_widget: QWidget) -> list[tuple[str, str]]:
-    """`(text, tooltip)` of the field labels of the form's root object, top to bottom."""
-    found = children(form_widget, FieldLabel, direct_only=True)
+    """
+    `(text, tooltip)` of the field labels of the form's root object, top to bottom.
+
+    A group's label is the title of its card, inside the card, so the labels
+    are those whose nearest object editor is the root, not its direct children.
+    """
+    found = [
+        label
+        for label in children(form_widget, FieldLabel)
+        if _owner(label) is form_widget
+    ]
     return [(label.text(), label.toolTip()) for label in found]
 
 

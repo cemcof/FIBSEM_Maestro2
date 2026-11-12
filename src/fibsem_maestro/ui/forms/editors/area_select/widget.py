@@ -36,6 +36,7 @@ from fibsem_maestro.ui.forms.editors.area_select.overlays import (
     overlay_problems,
 )
 from fibsem_maestro.ui.forms.issues import FieldIssue, Severity
+from fibsem_maestro.ui.forms.style import MUTED_TEXT_COLOR
 from fibsem_maestro.ui.ports import PreviewPermission, PreviewPort, PreviewRequest
 
 if TYPE_CHECKING:
@@ -55,6 +56,18 @@ _MIN_AREAS_ISSUE = "min_areas"
 
 _NOT_CONNECTED = "FIBSEM Maestro is not connected to a microscope."
 """Why Load fails in a form built without a preview port."""
+
+_THUMBNAIL_BACKGROUND = "#0E141A"
+"""Behind the thumbnail: darker than the window, so it reads as an empty viewer."""
+
+_THUMBNAIL_BORDER = "#37414F"
+"""Around the thumbnail: qdarkstyle's third background."""
+
+_NO_IMAGE_HTML = (
+    '<span style="font-size: 13px;">No image</span><br>'
+    '<span style="font-size: 11px; color: #60798B;">Load an image to draw the area</span>'
+)
+"""The thumbnail's text before an image is loaded; the hint in qdarkstyle's sixth background."""
 
 
 class AreaSelectWidget(QWidget, FieldEditor[list[RelativeArea]]):
@@ -152,9 +165,11 @@ class AreaSelectWidget(QWidget, FieldEditor[list[RelativeArea]]):
         self._thumbnail_label.setFixedHeight(self._THUMBNAIL_HEIGHT)
         self._thumbnail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._thumbnail_label.setStyleSheet(
-            "background: #1a1a1a; border: 0.5px solid #444; border-radius: 4px;"
+            f"background: {_THUMBNAIL_BACKGROUND}; border: 1px solid {_THUMBNAIL_BORDER};"
+            f" border-radius: 6px; color: {MUTED_TEXT_COLOR};"
         )
-        self._thumbnail_label.setText("No image")
+        self._thumbnail_label.setTextFormat(Qt.TextFormat.RichText)
+        self._thumbnail_label.setText(_NO_IMAGE_HTML)
         self._thumbnail_label.mousePressEvent = lambda _: self._toggle()
         self._thumbnail_label.setCursor(Qt.CursorShape.PointingHandCursor)
         outer.addWidget(self._thumbnail_label)

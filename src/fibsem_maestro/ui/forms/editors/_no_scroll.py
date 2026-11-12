@@ -1,18 +1,53 @@
 # Released under GPL-3.0 License.
 # Copyright (c) 2024-2026 CEMCOF
 
-"""Spin boxes and combo boxes that ignore the mouse wheel."""
+"""Spin boxes and combo boxes that ignore the mouse wheel; spin boxes with their text inset."""
 
 from typing import TYPE_CHECKING
 
-from PyQt6.QtWidgets import QComboBox, QDoubleSpinBox, QSpinBox
+from PyQt6.QtWidgets import (
+    QAbstractSpinBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QSpinBox,
+    QWidget,
+)
 
 if TYPE_CHECKING:
     from PyQt6.QtGui import QWheelEvent
 
+SPIN_BOX_TEXT_INSET = 5
+"""
+Space added before a spin box's number (px).
+
+Without it the number starts about 2 px from the frame, while the text of
+line edits and combo boxes starts about 7 px from theirs. A style sheet's
+padding does not reach the spin box's inner line edit, so it is set here.
+"""
+
+
+def _inset_text(spin_box: QAbstractSpinBox) -> None:
+    """
+    Move a spin box's text away from its left edge, as in the other inputs.
+
+    Args:
+        spin_box: The spin box.
+    """
+    if (line_edit := spin_box.lineEdit()) is not None:
+        line_edit.setTextMargins(SPIN_BOX_TEXT_INSET, 0, 0, 0)
+
 
 class NoScrollSpinBox(QSpinBox):
-    """A QSpinBox that ignores mouse wheel events."""
+    """
+    A QSpinBox that ignores mouse wheel events, with its number inset from the edge.
+
+    Args:
+        parent: The parent widget, if any.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        _inset_text(self)
 
     def wheelEvent(self, e: QWheelEvent | None) -> None:
         """Ignore the wheel event so it propagates to the parent widget."""
@@ -21,7 +56,16 @@ class NoScrollSpinBox(QSpinBox):
 
 
 class NoScrollDoubleSpinBox(QDoubleSpinBox):
-    """A QDoubleSpinBox that ignores mouse wheel events."""
+    """
+    A QDoubleSpinBox that ignores mouse wheel events, with its number inset from the edge.
+
+    Args:
+        parent: The parent widget, if any.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        _inset_text(self)
 
     def wheelEvent(self, e: QWheelEvent | None) -> None:
         """Ignore the wheel event so it propagates to the parent widget."""

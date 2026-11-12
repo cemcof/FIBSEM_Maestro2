@@ -7,14 +7,16 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QAbstractItemView, QListWidget, QWidget
 
 from fibsem_maestro.ui.forms.editor import FieldEditor
+from fibsem_maestro.ui.forms.editors.checklist import make_checklist
 
 
 class MultiSelectWidget(QListWidget, FieldEditor[list[str]]):
     """
     A list widget for selecting any number of string choices.
 
-    Displays each choice as a row and allows multiple selections, exposing
-    the selected texts as the widget value.
+    Displays each choice as a row with a checkbox (`make_checklist`) and
+    allows multiple selections, exposing the selected texts as the widget
+    value.
 
     Args:
         choices: The selectable strings, one per row.
@@ -31,15 +33,7 @@ class MultiSelectWidget(QListWidget, FieldEditor[list[str]]):
         super().__init__(parent)
         FieldEditor.__init__(self)
         self.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
-        self.setStyleSheet("""
-            QListWidget::item:selected {
-                background: #36678f;
-                color: #ffffff;
-            }
-            QListWidget::item:selected:hover {
-                background: #36678f;
-            }
-        """)
+        make_checklist(self)
 
         for choice in choices:
             self.addItem(choice)

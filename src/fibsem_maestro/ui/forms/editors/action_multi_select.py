@@ -10,6 +10,7 @@ from PyQt6.QtCore import QSignalBlocker
 from PyQt6.QtWidgets import QAbstractItemView, QListWidget, QListWidgetItem
 
 from fibsem_maestro.ui.forms.editor import FieldEditor
+from fibsem_maestro.ui.forms.editors.checklist import make_checklist
 from fibsem_maestro.ui.forms.issues import FieldValidationError
 from fibsem_maestro.ui.schema.choices import (
     accepts_action_type,
@@ -72,15 +73,8 @@ class ActionMultiSelectWidget(QListWidget, FieldEditor[list[str]]):
         self._entries: list[_Entry] = []
 
         self.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
-        self.setStyleSheet("""
-            QListWidget::item:selected {
-                background: #36678f;
-                color: #ffffff;
-            }
-            QListWidget::item:selected:hover {
-                background: #36678f;
-            }
-        """)
+        # a checkbox per row
+        make_checklist(self)
 
         self._populate(actions.actions, default or [])
         self.itemSelectionChanged.connect(self._emit)
