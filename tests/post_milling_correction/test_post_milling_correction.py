@@ -115,13 +115,11 @@ def add_correction(add_prepared: Callable[..., Action]) -> Callable[..., Action]
 
 
 def geometric(slice_distance: float, direction: Direction) -> tuple[float, float]:
-    """The shifts of one slice, seen by the electron beam at 52 degrees to the ion beam (nm)."""
-    sign = -1.0 if direction is Direction.UP else 1.0
+    """The expected default shifts (y, wd) of a milling, in nm: WD always increases."""
     angle = math.radians(52.0)
-    return (
-        sign * slice_distance * math.cos(angle),
-        sign * slice_distance * math.sin(angle),
-    )
+    y = math.cos(angle) * slice_distance
+    wd = math.sin(angle) * slice_distance
+    return (-y if direction is Direction.UP else y), wd
 
 
 def upcoming(action: Action) -> BeamProperties:
@@ -336,7 +334,7 @@ def test_default_correction_follows_later_changes_of_the_milling(
 
     # nothing of the old slice distance is kept by the correction
     milling.settings.slice_distance = 30.0
-    y, wd = geometric(30.0, Direction.DOWN)
+    y, wd = geometric(30.0, milling.settings.milling_direction)
     expected = shifted(upcoming(imaging), runs=1, y=y, wd=wd)
 
     outcome = correction.execute()

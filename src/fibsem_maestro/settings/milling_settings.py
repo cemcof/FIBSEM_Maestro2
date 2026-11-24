@@ -70,7 +70,7 @@ class MillingSettings(BaseSettings):
             widget=WidgetType.DROPDOWN, choices=lambda: [Direction.DOWN, Direction.UP]
         ),
     ] = Field(
-        default=Direction.DOWN, description="Direction in which the slicing progresses."
+        default=Direction.UP, description="Direction in which the slicing progresses."
     )
     do_not_mill: bool = Field(
         default=False,

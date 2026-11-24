@@ -35,6 +35,7 @@ def milling(add_action: Callable[..., Action]) -> Milling:
         milling_area=[_area(0.2)],
         pattern_type="rectangle",
         slice_distance=SLICE_NM,
+        milling_direction=Direction.DOWN,
     )
     action.prepare()
     assert isinstance(action, Milling)

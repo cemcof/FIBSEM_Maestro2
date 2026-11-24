@@ -43,14 +43,13 @@ def geometric_correction(milling: MillingSettings) -> tuple[float, float]:
         milling: Settings of the milling removing the slices.
 
     Returns:
-        The vertical image shift and the working-distance change, both in nm;
-        negated when milling up, which moves the face the other way.
+        The vertical image shift and the working-distance change, both in nm.
     """
     angle = math.radians(ION_ELECTRON_ANGLE_DEG)
     y_correction = math.cos(angle) * milling.slice_distance
     wd_correction = math.sin(angle) * milling.slice_distance
     if milling.milling_direction is Direction.UP:
-        return -y_correction, -wd_correction
+        return -y_correction, wd_correction
     return y_correction, wd_correction
 
 
