@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 
 from fibsem_maestro.logging.text.memory import MemoryTextLogger
 from fibsem_maestro.ui.forms.editors.object import ObjectWidget
+from fibsem_maestro.ui.forms.editors.optional import OptionalWidget
 from fibsem_maestro.ui.forms.editors.union import DiscriminatedUnionWidget
 from fibsem_maestro.ui.ports import TaskHandle
 
@@ -83,11 +84,8 @@ def field_at(root: QWidget, path: str) -> FieldEditor[Any]:
 
 def optional_checkbox(wrapper: FieldEditor[Any]) -> QCheckBox:
     """The checkbox of an optional field's wrapper (see `field_at`)."""
-    checkbox = cast("QWidget", wrapper).findChild(
-        QCheckBox, options=Qt.FindChildOption.FindDirectChildrenOnly
-    )
-    assert isinstance(checkbox, QCheckBox), "the field is not optional"
-    return checkbox
+    assert isinstance(wrapper, OptionalWidget), "the field is not optional"
+    return wrapper.checkbox
 
 
 def messages(editor: FieldEditor[Any]) -> list[str]:

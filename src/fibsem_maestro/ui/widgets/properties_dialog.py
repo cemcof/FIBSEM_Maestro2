@@ -70,7 +70,13 @@ class PropertiesDialog(QDialog):
         layout.addWidget(scroll)
 
         self._form = form_builder.build_live(properties, form_context)
-        scroll.setWidget(self._form.widget)
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.addWidget(self._form.widget)
+        # the form keeps its height; the rest of a tall dialog stays empty below it
+        container_layout.addStretch()
+        scroll.setWidget(container)
 
         standard = (
             QDialogButtonBox.StandardButton.Save

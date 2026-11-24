@@ -72,7 +72,7 @@ class _FieldRow:
         label: The field's label, coloured while the field has issues.
         message: The line below the editor describing the issues; hidden while
             there are none.
-        base_style: The label's style without issues (a group's title is bold).
+        base_style: The label's style without issues.
         in_column: Whether the label is in the label column; a group's label
             is the title of its card instead.
     """

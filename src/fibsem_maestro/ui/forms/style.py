@@ -58,6 +58,11 @@ CARD_STYLESHEET = "\n".join(
             for shade, (background, border) in CARD_COLORS.items()
         ),
         f"""
+    QFrame#{CARD_OBJECT_NAME}[plain="true"] {{
+        background-color: transparent;
+        border-color: transparent;
+    }}""",
+        f"""
     QFrame#{CARD_OBJECT_NAME} QLabel,
     QFrame#{CARD_OBJECT_NAME} QCheckBox,
     QFrame#{CARD_OBJECT_NAME} QRadioButton,

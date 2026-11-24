@@ -5,7 +5,7 @@
 
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QEvent, QPointF, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QPointF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (
     QFrame,
@@ -35,11 +35,11 @@ _CHEVRON_BOX = _CHEVRON_SIZE + 4
 """Edge of the chevron's clickable box (px)."""
 
 _TITLE_SPACING = 4
-"""Space between the chevron, the checkbox slot and the title (px)."""
+"""Space between the chevron and the title (px)."""
 
 TITLE_TEXT_OFFSET = CARD_INDENT + _CHEVRON_BOX + _TITLE_SPACING
 """
-How far right of a card's left edge its title starts (px), without a checkbox before it.
+How far right of a card's left edge its title starts (px).
 
 Field labels next to the card start there too, so that labels and titles
 of one object form one column of text.
@@ -50,9 +50,6 @@ SECTION_OBJECT_NAME = "formSection"
 
 _HEADER_SPACING = 12
 """Space between the title block, the header widgets and the trailing widgets (px)."""
-
-TITLE_STYLE = "font-weight: bold;"
-"""Style of a card's title."""
 
 _SECTION_TITLE_STYLE = "font-size: 14px; font-weight: bold;"
 """Style of a section's title."""
@@ -135,12 +132,15 @@ class CollapsibleGroupBox(QFrame):
     """
     A card with a title line above its body; the chevron in the title line collapses the body.
 
-    The title line holds, from the left: the chevron, a slot for a checkbox
-    (`title_slot`, e.g. of an optional group), the title, the widgets added
-    with `add_header_widget` (e.g. the variants of a union), and the widgets
-    added with `add_header_trailing` at the right end. The chevron, slot and
-    title form the title block, whose width `set_title_column` can extend so
-    that what follows starts on a given column.
+    The title line holds, from the left: the chevron, the title, the widgets
+    added with `add_header_lead` (e.g. the checkbox of an optional group), the
+    widgets added with `add_header_widget` (e.g. the variants of a union), and
+    the widgets added with `add_header_trailing` at the right end. The chevron
+    and title form the title block, whose width `set_title_column` can extend
+    so that what follows starts on a given column.
+
+    While inactive (`set_active`) or empty (`set_body_empty`), a card looks
+    like a plain field row: no frame, no chevron, title not bold.
 
     Nested cards alternate two background shades (`form_style.CARD_COLORS`).
     As a section (`section=True`, e.g. Propagations) the box has no card: its
@@ -163,7 +163,9 @@ class CollapsibleGroupBox(QFrame):
         self._collapsed = False
         self._active = True
         self._empty = False
+        self._plain = False
         self._section = section
+        self._leads: list[QWidget] = []
 
         if section:
             self.setObjectName(SECTION_OBJECT_NAME)
@@ -190,17 +192,17 @@ class CollapsibleGroupBox(QFrame):
 
         self._toggle = Chevron(self._title_block)
         self._toggle.clicked.connect(self._on_toggle_clicked)
+        # the title keeps its place while the chevron is hidden
+        policy = self._toggle.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)
+        self._toggle.setSizePolicy(policy)
         title_layout.addWidget(self._toggle)
 
-        self._slot = QWidget()
-        self._slot.setFixedSize(QSize(18, 18))
-        self._slot.hide()
-        title_layout.addWidget(self._slot)
-
         self._title_label: QLabel = QLabel(title)
-        self._title_label.setStyleSheet(
-            _SECTION_TITLE_STYLE if section else TITLE_STYLE
-        )
+        if section:
+            self._title_label.setStyleSheet(_SECTION_TITLE_STYLE)
+        else:
+            _set_bold(self._title_label, True)
         title_layout.addWidget(self._title_label)
         title_layout.addStretch()
         header_layout.addWidget(self._title_block)
@@ -273,7 +275,8 @@ class CollapsibleGroupBox(QFrame):
         self._title_layout.removeWidget(self._title_label)
         self._title_label.deleteLater()
         self._title_label = label
-        label.setStyleSheet(TITLE_STYLE)
+        # bold through the font: the label's own style sheet is left to its owner
+        _set_bold(label, not self._plain)
         self._title_layout.insertWidget(index, label)
 
     def add_header_widget(self, widget: QWidget) -> None:
@@ -296,6 +299,17 @@ class CollapsibleGroupBox(QFrame):
         self._trailing_at += 1
         self._header_widget_count += 1
 
+    def add_header_lead(self, widget: QWidget) -> None:
+        """
+        Add a widget to the title line right after the title, before the header widgets.
+
+        Args:
+            widget: The widget; shown also while the card is inactive.
+        """
+        self._header_layout.insertWidget(1 + len(self._leads), widget)
+        self._leads.append(widget)
+        self._trailing_at += 1
+
     def add_header_trailing(self, widget: QWidget) -> None:
         """
         Add a widget at the right end of the title line, e.g. a remove button.
@@ -305,50 +319,40 @@ class CollapsibleGroupBox(QFrame):
         """
         self._header_layout.addWidget(widget, 0, Qt.AlignmentFlag.AlignVCenter)
 
-    def title_slot(self) -> QWidget:
-        """
-        Reserve the place before the title for a widget kept elsewhere, e.g. an optional checkbox.
-
-        Returns:
-            The placeholder, sized for a checkbox; the caller keeps its own
-            widget over it.
-        """
-        self._slot.show()
-        return self._slot
-
     def set_title_column(self, width: int) -> None:
         """
         Make the title block at least this wide, so the variants after it start on a column.
 
         Args:
-            width: The minimum width of the chevron, slot and title (px).
+            width: The minimum width of the chevron and title (px).
         """
         self._title_block.setMinimumWidth(width)
 
     def set_active(self, active: bool) -> None:
         """
-        Show or hide everything but the title line's chevron, slot and title.
+        Show or hide everything but the title and the lead widgets.
 
-        An inactive card (e.g. an optional group set to None) shows only its
-        title line's start; its collapsed state is kept for when it is active
-        again. The chevron stays, so the title does not shift.
+        An inactive card (e.g. an optional group set to None) keeps its
+        collapsed state for when it is active again.
 
         Args:
-            active: Whether the body and the title line's other widgets show.
+            active: Whether the body and the header widgets show.
         """
         self._active = active
         for index in range(self._header_layout.count()):
             item = self._header_layout.itemAt(index)
             widget = item.widget() if item is not None else None
-            if widget is not None and widget is not self._title_block:
+            if (
+                widget is not None
+                and widget is not self._title_block
+                and widget not in self._leads
+            ):
                 widget.setVisible(active)
         self._show_body()
 
     def set_body_empty(self, empty: bool) -> None:
         """
         Hide the body while it has nothing to show, e.g. a union's variant without fields.
-
-        The card then fits its title line, without the space below it.
 
         Args:
             empty: Whether the body shows nothing.
@@ -357,16 +361,26 @@ class CollapsibleGroupBox(QFrame):
         self._show_body()
 
     def _show_body(self) -> None:
-        """Show the body unless the card is inactive, collapsed or empty; fit the margins."""
+        """Show the body unless the card is inactive, collapsed or empty; look plain while it has none."""
         self._collapse_body().setVisible(
             self._active and not self._collapsed and not self._empty
         )
+        plain = not self._section and (not self._active or self._empty)
+        if plain != self._plain:
+            self._plain = plain
+            self._toggle.setVisible(not plain)
+            _set_bold(self._title_label, not plain)
+            self.setProperty("plain", plain)
+            self._restyle()
         self._update_margins()
 
     def _update_margins(self) -> None:
         """Margins around the title line, and below the body when it is shown."""
         if self._section:
             self._outer.setContentsMargins(0, 4, 0, 0)
+            return
+        if self._plain:
+            self._outer.setContentsMargins(CARD_INSET, 0, CARD_INSET, 0)
             return
         body_shown = self._body is not None and not self._body.isHidden()
         self._outer.setContentsMargins(
@@ -422,7 +436,18 @@ class CollapsibleGroupBox(QFrame):
         shade = "a" if depth % 2 == 0 else "b"
         if self.property("shade") != shade:
             self.setProperty("shade", shade)
-            if (style := self.style()) is not None:
-                style.unpolish(self)
-                style.polish(self)
-            self.update()
+            self._restyle()
+
+    def _restyle(self) -> None:
+        """Apply the style sheet again after a property it selects on changed."""
+        if (style := self.style()) is not None:
+            style.unpolish(self)
+            style.polish(self)
+        self.update()
+
+
+def _set_bold(label: QLabel, bold: bool) -> None:
+    """Make a label's font bold or normal."""
+    font = label.font()
+    font.setBold(bold)
+    label.setFont(font)

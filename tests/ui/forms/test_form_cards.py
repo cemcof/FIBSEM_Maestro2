@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING
 
 import pytest
 from gui_testkit.forms import editor_at, field_at, optional_checkbox
-from gui_testkit.sample_settings import Color, KitchenSink, Optionals
+from gui_testkit.sample_settings import Color, KitchenSink, Leaf, Optionals
 from pydantic import Field
-from PyQt6.QtCore import QEvent, QPoint, QRect
+from PyQt6.QtCore import QEvent, QPoint, QRect, Qt
 from PyQt6.QtGui import QHelpEvent
 from PyQt6.QtWidgets import (
     QAbstractSpinBox,
@@ -60,6 +60,13 @@ class Capped(BaseSettings):
 
     hue: Color = Field(default=Color.RED)
     choices: Choices = Field(default_factory=Choices)
+
+
+class OptionalGroups(BaseSettings):
+    """Only optional groups: nothing else to take a tall form's spare height."""
+
+    first: Leaf | None = Field(default=None)
+    second: Leaf | None = Field(default=None)
 
 
 @pytest.fixture
@@ -230,34 +237,98 @@ def test_optional_group_checkbox_stays_on_the_title_line(
     shown_form: Callable[[BaseSettings], Form], qtbot: QtBot
 ) -> None:
     form = shown_form(Optionals())
-    wrapper = field_at(form.widget, "extra")
-    assert isinstance(wrapper, OptionalWidget)
+    root = form.widget
+    wrapper = field_at(root, "extra")
     checkbox = optional_checkbox(wrapper)
     card = _card(wrapper)
+    plain = optional_checkbox(field_at(root, "limit"))
 
-    # it once landed outside the shrunk wrapper, where it could not be clicked
     for _ in range(3):
         checkbox.click()
         qtbot.wait(20)
-        box = _rect_in(checkbox, wrapper)
-        title = _rect_in(card.title_label, wrapper)
-        assert wrapper.rect().contains(box)
+        box = _rect_in(checkbox, root)
+        title = _rect_in(card.title_label, root)
         assert abs(box.center().y() - title.center().y()) <= 3
-        assert box.right() < title.left()
+        # where the checkbox of an optional field of one value is
+        assert box.left() == _rect_in(plain, root).left()
 
 
-def test_unticked_optional_group_keeps_its_title_and_hides_its_fields(
-    shown_form: Callable[[BaseSettings], Form],
+def test_unticked_optional_group_looks_like_a_plain_field(
+    shown_form: Callable[[BaseSettings], Form], qtbot: QtBot
 ) -> None:
     form = shown_form(Optionals())
-    wrapper = field_at(form.widget, "extra")
+    root = form.widget
+    wrapper = field_at(root, "extra")
     card = _card(wrapper)
-    inner = editor_at(form.widget, "extra")
+    inner = editor_at(root, "extra")
     assert isinstance(inner, QWidget)
+    limit = root.field_label("limit")
+    assert limit is not None
 
     assert wrapper.get_value() is None
-    assert card.title_label.isVisibleTo(form.widget)
+    assert optional_checkbox(wrapper).isVisibleTo(root)
+    assert not inner.isVisibleTo(root)
+    # the chevron of an unticked group expanded nothing
+    assert not card.toggle.isVisibleTo(root)
+    assert not card.title_label.font().bold()
+    assert _text_left(card.title_label, root) == _text_left(limit, root)
+
+    optional_checkbox(wrapper).click()
+    qtbot.wait(20)
+
+    assert inner.isVisibleTo(root)
+    assert card.toggle.isVisibleTo(root)
+    assert card.title_label.font().bold()
+    assert _text_left(card.title_label, root) == _text_left(limit, root)
+
+
+def test_union_card_looks_like_a_plain_field_for_a_variant_without_fields(
+    shown_form: Callable[[BaseSettings], Form], qtbot: QtBot
+) -> None:
+    form = shown_form(KitchenSink())
+    card = _card(field_at(form.widget, "shape"))
+    union = editor_at(form.widget, "shape")
+    assert isinstance(union, DiscriminatedUnionWidget)
+
+    union.select("point")
+    qtbot.wait(20)
+
+    assert not card.toggle.isVisibleTo(card)
+    assert not card.title_label.font().bold()
+
+    union.select("circle")
+    qtbot.wait(20)
+
+    assert card.toggle.isVisibleTo(card)
+    assert card.title_label.font().bold()
+
+
+def test_ticked_optional_group_collapses_with_its_chevron(
+    shown_form: Callable[[BaseSettings], Form], qtbot: QtBot
+) -> None:
+    form = shown_form(Optionals(extra=Leaf()))
+    card = _card(field_at(form.widget, "extra"))
+    inner = editor_at(form.widget, "extra")
+    assert isinstance(inner, QWidget)
+    assert inner.isVisibleTo(form.widget)
+
+    qtbot.mouseClick(card.toggle, Qt.MouseButton.LeftButton)
+
+    assert card.collapsed
     assert not inner.isVisibleTo(form.widget)
+
+
+def test_optional_groups_do_not_stretch_in_a_tall_form(
+    shown_form: Callable[[BaseSettings], Form],
+) -> None:
+    # spare height of the form went to the optional groups, which floated
+    # in gaps
+    form = shown_form(OptionalGroups(first=Leaf()))
+
+    for name in ("first", "second"):
+        wrapper = field_at(form.widget, name)
+        assert isinstance(wrapper, QWidget)
+        assert wrapper.height() == _card(wrapper).height()
 
 
 @pytest.mark.parametrize("settings", [KitchenSink(), Capped()], ids=["sink", "capped"])
