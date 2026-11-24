@@ -47,12 +47,12 @@ def indicators_for(
     Args:
         actions: The workflow's actions.
         next_action: The currently running action, the next action to run, or None.
-        state: The run state; the arrow is shown only outside EDITING and RELOADED.
+        state: The run state; the arrow is shown except while EDITING.
 
     Returns:
         The indicator of each action.
     """
-    show_arrow = state not in (AppState.EDITING, AppState.RELOADED)
+    show_arrow = state is not AppState.EDITING
     return {
         action: ActionIndicator(
             prepared=action.has_stored_properties() and not action.preparation_issues(),

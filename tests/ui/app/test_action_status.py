@@ -12,7 +12,12 @@ from gui_testkit.app import wait_for_state
 from gui_testkit.situations import store_unappliable_props
 
 from fibsem_maestro.action.registry import ACTION_REGISTRY
-from fibsem_maestro.ui.app.action_status import ActionIndicator, indicators_for
+from fibsem_maestro.ui.app.action_status import (
+    ActionIndicator,
+    ActionStatus,
+    indicators_for,
+)
+from fibsem_maestro.ui.app.run_controller import RunController
 from fibsem_maestro.ui.app.run_state import AppState
 from fibsem_maestro.workflow.workflow import Workflow
 
@@ -67,15 +72,31 @@ def test_indicators_check_mark_needs_no_preparation_issues(
     assert not indicators_for([action], None, AppState.EDITING)[action].prepared
 
 
-def test_indicators_arrow_only_outside_editing_and_reloaded(
+def test_indicators_arrow_only_outside_editing(
     actions: tuple[Action, Action],
 ) -> None:
     first, second = actions
     for state in AppState:
         indicators = indicators_for(actions, second, state)
-        shown = state not in (AppState.EDITING, AppState.RELOADED)
-        assert indicators[second].next_to_run is shown, state
+        assert indicators[second].next_to_run is (state is not AppState.EDITING), state
         assert not indicators[first].next_to_run
+
+
+def test_status_arrow_after_a_reload_marks_the_next_action_to_run(
+    services: Services, session: WorkflowSession, actions: tuple[Action, Action]
+) -> None:
+    first, second = actions
+    # stopped after the first action of slice 3, then the application restarted
+    session.workflow.ctx.set_slice(3)
+    first.ctx.set_slice(4)
+    second.ctx.set_slice(3)
+    run = RunController(session, services.tasks)
+    assert run.state is AppState.RELOADED
+
+    status = ActionStatus(session, run, services.tasks)
+
+    assert not status.indicator(first).next_to_run
+    assert status.indicator(second).next_to_run
 
 
 def test_status_arrow_follows_interruptions_and_pauses(
