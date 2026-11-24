@@ -22,7 +22,8 @@ from fibsem_maestro.autofunction.result import AutofunctionResult
 from fibsem_maestro.autofunction.sweep_space import LinearSweepSpace
 from fibsem_maestro.autofunction.sweep_step import SweepPoint, SweepStep
 from fibsem_maestro.core.detail_band import DetailBand
-from fibsem_maestro.core.frequency import Every
+from fibsem_maestro.core.frequency import Every, Never
+from fibsem_maestro.criterion.sharpness import Better, Sharpness
 from fibsem_maestro.imaging.imaging import Imaging, ImagingState
 from fibsem_maestro.logging.text.contextual import ContextualTextLogger
 from fibsem_maestro.microscope.microscope import Microscope
@@ -68,7 +69,9 @@ def _interleaved_results(
     values: list[SweepPoint], sharpness: dict[float, float]
 ) -> list[AutofunctionResult]:
     return [
-        AutofunctionResult(sharpness[v[0]], SweepStep(0, v, i))
+        AutofunctionResult(
+            Sharpness(sharpness[v[0]], Better.HIGHER), SweepStep(0, v, i)
+        )
         for i, v in enumerate(values)
     ]
 
@@ -144,12 +147,14 @@ def test_jobs_manager_returns_every_finished_result() -> None:
     jobs = JobsManager(executor=LateCallbackExecutor())
     for i in range(3):
         jobs.submit(
-            lambda i=i: AutofunctionResult(float(i), SweepStep(0, (float(i),), i))
+            lambda i=i: AutofunctionResult(
+                Sharpness(float(i), Better.HIGHER), SweepStep(0, (float(i),), i)
+            )
         )
 
     results = jobs.wait_and_collect()
 
-    assert sorted(r.sharpness for r in results) == [0.0, 1.0, 2.0]
+    assert sorted(r.sharpness.value for r in results) == [0.0, 1.0, 2.0]
 
 
 def test_jobs_manager_drops_failed_jobs() -> None:
@@ -159,8 +164,12 @@ def test_jobs_manager_drops_failed_jobs() -> None:
         raise RuntimeError("criterion failed")
 
     jobs.submit(fail)
-    jobs.submit(lambda: AutofunctionResult(1.0, SweepStep(0, (1.0,), 1)))
-    assert [r.sharpness for r in jobs.wait_and_collect()] == [1.0]
+    jobs.submit(
+        lambda: AutofunctionResult(
+            Sharpness(1.0, Better.HIGHER), SweepStep(0, (1.0,), 1)
+        )
+    )
+    assert [r.sharpness.value for r in jobs.wait_and_collect()] == [1.0]
 
 
 # steps of every sweep; a single sweep keeps its run in progress for this many slices
@@ -811,6 +820,28 @@ def test_imaging_frame_slice_survives_saving_the_state_and_a_skip(
 
 def test_imaging_state_saved_without_a_frame_slice_still_loads(tmp_path: Path) -> None:
     file = tmp_path / "state.yaml"
-    file.write_text("image_sharpness: 0.5\n")
+    file.write_text("image_sharpness: null\n")
 
     assert ImagingState.from_file(file).frame_slice is None
+
+
+@pytest.mark.parametrize(("frame_nm", "triggered"), [(5.0, True), (3.0, False)])
+def test_sharpness_limit_of_a_lower_is_sharper_metric_triggers_above_it(
+    add_action: Callable[..., Action],
+    monkeypatch: pytest.MonkeyPatch,
+    frame_nm: float,
+    triggered: bool,
+) -> None:
+    imaging = add_action("imaging", "imaging")
+    autofunction = add_action(
+        "autofunction",
+        "af",
+        linked_imaging="imaging",
+        execution_frequency=Never(),
+        sharpness_limit=4.0,
+    )
+    assert isinstance(autofunction, Autofunction)
+    frame = Sharpness(frame_nm, Better.LOWER, "nm")
+    monkeypatch.setattr(imaging, "wait_for_sharpness", lambda: frame)
+
+    assert autofunction.should_execute() is triggered

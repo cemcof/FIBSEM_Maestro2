@@ -10,9 +10,7 @@ import numpy as np
 from fibsem_maestro.core.area import PixelArea, RelativeArea
 from fibsem_maestro.core.point import PixelPoint
 from fibsem_maestro.criterion.error import CriterionError
-from fibsem_maestro.criterion.functions import (
-    CRITERION_FUNCTIONS,
-)
+from fibsem_maestro.criterion.functions import CRITERION_METRICS
 from fibsem_maestro.criterion.reductors import REDUCTORS
 from fibsem_maestro.criterion.result import (
     CriterionResult,
@@ -31,6 +29,7 @@ if TYPE_CHECKING:
 
     from fibsem_maestro.core.image import Image
     from fibsem_maestro.core.resolution import Resolution
+    from fibsem_maestro.criterion.sharpness import Sharpness
     from fibsem_maestro.logging.image.image_logger import ImageLogger
     from fibsem_maestro.logging.text.text_logger import TextLogger
     from fibsem_maestro.settings.criterion_settings import CriterionSettings
@@ -71,16 +70,17 @@ class Criterion:
         self._calculation_mode = settings.calculation_mode
         self._tiling_mode = settings.tiling_mode
         self._metric = settings.sharpness_metric
-        self._sharpness_metric_fn = CRITERION_FUNCTIONS.get(self._metric.type)
+        self._metric_spec = CRITERION_METRICS.get(self._metric.type)
+        self._sharpness_metric_fn = self._metric_spec.function
 
         if isinstance(self._tiling_mode, MultiTileMode):
             self._tile_reduction_fn = REDUCTORS.get(self._tiling_mode.tile_reduction_fn)
             self._tile_size = self._tiling_mode.tile_size
             self._tile_relative_overlap = self._tiling_mode.relative_overlap
 
-    def calculate_sharpness(self, image: Image) -> float:
+    def calculate_sharpness(self, image: Image) -> Sharpness:
         """
-        Compute the sharpness score for an image.
+        Compute the sharpness of an image.
 
         For 1D images, the metric function is applied directly without cropping
         or tiling. For 2D images, the configured calculation and tiling modes
@@ -90,18 +90,16 @@ class Criterion:
             image: The image to evaluate.
 
         Returns:
-            Sharpness score as a single float. Higher values indicate a sharper
-            image, though the scale depends on the chosen metric function.
+            The sharpness, in the metric's unit; compare sharpness values by
+            their `score`.
         """
         self._txt_log.info("Sharpness calculation started.")
 
         # handle 1D images - no cropping, no tiling, no masking
         if len(image.shape) == 1:
-            sharpness = float(
-                self._sharpness_metric_fn(image, self._metric, self._txt_log)
-            )
+            value = float(self._sharpness_metric_fn(image, self._metric, self._txt_log))
             self._txt_log.info("Finished sharpness calculation.")
-            return sharpness
+            return self._metric_spec.sharpness(value)
 
         match self._calculation_mode:
             case BasicMode() as mode:
@@ -112,7 +110,7 @@ class Criterion:
                     result.best_tile,
                     result.sharpness_map,
                 )
-                sharpness = result.sharpness
+                value = result.sharpness
 
             case MaskMode() as mode:
                 _ = mode
@@ -120,7 +118,7 @@ class Criterion:
                 # TODO: masking
 
         self._txt_log.info("Finished sharpness calculation.")
-        return sharpness
+        return self._metric_spec.sharpness(value)
 
     def _calculate_sharpness_for_image(self, image: Image) -> CriterionResult:
         """
@@ -187,8 +185,9 @@ class Criterion:
             raise CriterionError(f"The calculated sharpness is {final_sharpness}.")
 
         # get the tile with the best sharpness
+        scores = [self._metric_spec.better.score(x) for x in sharpnesses]
         best_tile = (
-            cropped.crop(tiles[int(np.nanargmax(sharpnesses))])
+            cropped.crop(tiles[int(np.nanargmax(scores))])
             if self._settings.log_best_tile
             else None
         )
@@ -373,7 +372,7 @@ class Criterion:
         Args:
             full_image: The original full-resolution image.
             tiles: Tile positions in pixel coordinates, used for overlays.
-            best_tile: The tile with the highest sharpness score, or None if best-tile logging is disabled.
+            best_tile: The sharpest tile, or None if best-tile logging is disabled.
             map: The sharpness map, or None if sharpness map logging is disabled.
         """
         self._txt_log.debug("Logging criterion images.")

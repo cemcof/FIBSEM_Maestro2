@@ -167,7 +167,7 @@ class FftMetric(DetailBandMetric):
 class FrcMetric(BaseSettings):
     type: Literal["frc"] = Field(
         default="frc",
-        description="Resolution limit from single-image Fourier ring correlation; no detail range needed.",
+        description="Resolution from single-image Fourier ring correlation, in nm; lower is sharper.",
     )
 
 

@@ -20,6 +20,7 @@ from fibsem_maestro.autofunction.sweep_space import sweep_attributes
 from fibsem_maestro.autofunction.sweeping import Sweeping
 from fibsem_maestro.core.beam_type import BeamType
 from fibsem_maestro.core.point import PixelPoint
+from fibsem_maestro.criterion.sharpness import Better
 from fibsem_maestro.logging.image.overlay import PolylineOverlay
 from fibsem_maestro.settings.autofunction_settings import AutoscriptFunctionBase
 from fibsem_maestro.settings.autofunction_settings import BasicMode as BasicModeSettings
@@ -37,6 +38,7 @@ if TYPE_CHECKING:
         SweepPoint,
         SweepStep,
     )
+    from fibsem_maestro.criterion.sharpness import Sharpness
     from fibsem_maestro.imaging.imaging import Imaging
     from fibsem_maestro.microscope.microscope import Microscope
     from fibsem_maestro.settings.autofunction_settings import AutofunctionMode
@@ -441,29 +443,46 @@ class SweepRunner:
             r.sweep.line_index for r in sorted_results if r.sweep.line_index is not None
         ]
 
-        if max(sharpness_values) == 0:
+        if (fractions := _relative_to_sharpest(sharpness_values)) is None:
             self._ctx.text_logger.warning(
-                "Max sharpness value is 0. Unable to normalize the sharpness, skipping logging."
+                "Unable to normalize the sharpness, skipping logging."
             )
             return
 
-        # scale for normalizing sharpness to fit the image
-        scale = image.shape[1] / max(sharpness_values)
-
+        width = image.shape[1]
         self._ctx.image_logger.save_image(
             filename=f"{line_focus_name}_line_focus.png",
             img=image,
             overlays=[
                 PolylineOverlay(
                     points=[
-                        PixelPoint(x=int(v * scale), y=line_idx)
-                        for v, line_idx in zip(sharpness_values, line_indices)
+                        PixelPoint(x=int(f * width), y=line_idx)
+                        for f, line_idx in zip(fractions, line_indices)
                     ],
                     color="red",
                 )
             ],
             title="Line focus plot",
         )
+
+
+def _relative_to_sharpest(values: list[Sharpness]) -> list[float] | None:
+    """
+    Express sharpness values as fractions of the sharpest one.
+
+    Args:
+        values: Sharpness values of one metric.
+
+    Returns:
+        One fraction per value, 1 for the sharpest and lower for less sharp
+        ones; None if the values are not all positive.
+    """
+    raw = [s.value for s in values]
+    if values[0].better is Better.HIGHER:
+        top = max(raw)
+        return None if top <= 0 or min(raw) < 0 else [v / top for v in raw]
+    low = min(raw)
+    return None if low <= 0 else [low / v for v in raw]
 
 
 def swept_attributes(mode: AutofunctionMode) -> tuple[str, ...]:

@@ -15,10 +15,11 @@ MIN_FRC_SIDE_PX = 16
 """Smallest image side, in pixels; 8 px half-images still give 4 rings."""
 
 
-def frc_cutoff_frequency(img: NDArray[Any], pixel_size: float) -> float:
+def frc_resolution(img: NDArray[Any], pixel_size: float) -> float:
     """
-    Return the spatial frequency at which an image's single-image FRC drops below 1/7.
+    Return the resolution at which an image's single-image FRC drops below 1/7.
 
+    The image is split into two half-images of diagonal pixel neighbours.
     The largest centred square of even side is used, so that both half-images
     are square and equal. Each half-image has its mean removed and a 2-D Hann
     window applied to suppress edge effects.
@@ -28,13 +29,14 @@ def frc_cutoff_frequency(img: NDArray[Any], pixel_size: float) -> float:
         pixel_size: Pixel size of `img`, in nm.
 
     Returns:
-        The cut-off frequency, in 1/nm; higher means sharper. If the FRC never
-        drops below the threshold, the highest frequency the half-images
-        sample is returned.
+        The resolution, in nm; lower means sharper. If the FRC never drops
+        below the threshold, the finest resolution the half-images sample,
+        about 4 pixels, is returned.
 
     Raises:
         ValueError: If the image is not 2-D, is smaller than `MIN_FRC_SIDE_PX`
-            on a side, or has no structure (a constant image).
+            on a side, has no structure (a constant image), or its FRC drops
+            below the threshold at the lowest frequency.
     """
     if img.ndim != 2:
         raise ValueError(f"FRC needs a 2-D image, got {img.ndim} dimensions.")
@@ -59,10 +61,16 @@ def frc_cutoff_frequency(img: NDArray[Any], pixel_size: float) -> float:
     if not np.all(np.isfinite(frc)):
         raise ValueError("FRC is undefined for an image without structure.")
 
+    crossing = _first_crossing(frc, FRC_THRESHOLD)
+    if crossing <= 0.0:
+        raise ValueError("FRC shows no signal shared by the half-images.")
+
     # ring r of an n-pixel half-image lies at r / n cycles per half-image pixel;
-    # half-image pixels are converted with sqrt(2) * pixel_size
-    cycles_per_half_px = _first_crossing(frc, FRC_THRESHOLD) / half_side
-    return float(cycles_per_half_px / (np.sqrt(2.0) * pixel_size))
+    # a half-image takes every other row and column, so its pixels are 2 *
+    # pixel_size apart (the two half-images are offset diagonally, but that
+    # offset is not their sampling distance)
+    cycles_per_half_px = crossing / half_side
+    return float(2.0 * pixel_size / cycles_per_half_px)
 
 
 def _ring_correlation(

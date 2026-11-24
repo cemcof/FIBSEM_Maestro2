@@ -16,6 +16,7 @@ from fibsem_maestro.core.area import RelativeArea
 from fibsem_maestro.core.beam_shift import BeamShift
 from fibsem_maestro.core.format import ImageFormat
 from fibsem_maestro.criterion.criterion import Criterion
+from fibsem_maestro.criterion.sharpness import Sharpness
 from fibsem_maestro.imaging.error import ImagingError
 from fibsem_maestro.logging.logging import with_logging_context
 from fibsem_maestro.microscope.error import MicroscopeError
@@ -40,7 +41,7 @@ if TYPE_CHECKING:
 
 
 class ImagingState(ActionState):
-    image_sharpness: float | None = None
+    image_sharpness: Sharpness | None = None
     # slice the last frame (and its sharpness) was acquired on; None if none was
     frame_slice: int | None = None
 
@@ -71,7 +72,7 @@ class Imaging(Action[ImagingSettings, ImagingState]):
         super().__init__(name, microscope, settings, ctx, actions)
 
         # sharpness of the acquired image
-        self._image_sharpness: float | None = None
+        self._image_sharpness: Sharpness | None = None
         self._sharpness_thread: threading.Thread | None = None
 
         # save the last acquired image
@@ -280,7 +281,7 @@ class Imaging(Action[ImagingSettings, ImagingState]):
         image.save(output_path, ImageFormat.TIF)
         return output_path
 
-    def wait_for_sharpness(self) -> float | None:
+    def wait_for_sharpness(self) -> Sharpness | None:
         """
         Block until the background sharpness calculation finishes.
 
@@ -345,7 +346,7 @@ class Imaging(Action[ImagingSettings, ImagingState]):
 
         try:
             self._image_sharpness = criterion.calculate_sharpness(image)
-            text_logger.debug(f"Image sharpness: {self._image_sharpness}.")
+            text_logger.info(f"Image sharpness: {self._image_sharpness}.")
         except Exception as e:
             text_logger.warning(f"Could not calculate image sharpness: {e}")
 

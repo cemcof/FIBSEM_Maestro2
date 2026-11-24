@@ -4,14 +4,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 from scipy.ndimage import gaussian_filter
 
 from fibsem_maestro.core.registry import Registry
 from fibsem_maestro.criterion.error import CriterionError
-from fibsem_maestro.criterion.frc import frc_cutoff_frequency
+from fibsem_maestro.criterion.frc import frc_resolution
+from fibsem_maestro.criterion.sharpness import Better, Sharpness
 from fibsem_maestro.settings.criterion_settings import (
     SharpnessMetric,
 )
@@ -53,11 +55,65 @@ def _detail(metric: DetailBandMetric) -> DetailBand:
 CriterionFunction = Callable[["Image", SharpnessMetric, "TextLogger"], np.floating]
 """A metric: image, the metric's own settings variant, and a logger to a sharpness."""
 
-# registry of criterion functions
-CRITERION_FUNCTIONS = Registry[CriterionFunction]("criterion function")
+
+@dataclass(frozen=True)
+class CriterionMetric:
+    """
+    A metric function, and the direction and unit of the values it returns.
+
+    Attributes:
+        function: Computes the metric's value for an image.
+        better: Whether higher or lower values mean a sharper image.
+        unit: Unit of the values, or None for a unitless metric.
+    """
+
+    function: CriterionFunction
+    better: Better
+    unit: str | None = None
+
+    def sharpness(self, value: float) -> Sharpness:
+        """
+        Wrap a value of this metric.
+
+        Args:
+            value: A value returned by `function`, in `unit`.
+
+        Returns:
+            The value with the metric's direction and unit.
+        """
+        return Sharpness(value, self.better, self.unit)
 
 
-@CRITERION_FUNCTIONS.register("bandpass")
+CRITERION_METRICS = Registry[CriterionMetric]("criterion metric")
+"""Every metric, by the `type` of its settings variant."""
+
+
+def _metric[F: Callable[..., np.floating]](
+    key: str, better: Better, unit: str | None = None
+) -> Callable[[F], F]:
+    """
+    Register a function as a metric.
+
+    Args:
+        key: The `type` of the metric's settings variant.
+        better: Whether higher or lower values mean a sharper image.
+        unit: Unit of the values, or None for a unitless metric.
+
+    Returns:
+        A decorator registering the function and returning it unchanged.
+    """
+
+    def decorator(function: F) -> F:
+        # each function takes its own settings variant, which is the one
+        # registered under its key
+        metric = CriterionMetric(cast("CriterionFunction", function), better, unit)
+        CRITERION_METRICS.add(key, metric)
+        return function
+
+    return decorator
+
+
+@_metric("bandpass", Better.HIGHER)
 def bandpass_criterion(
     img: Image, metric: DetailBandMetric, _logger: TextLogger
 ) -> np.floating:
@@ -78,7 +134,7 @@ def bandpass_criterion(
     return np.mean(abs(img_high - img_low))
 
 
-@CRITERION_FUNCTIONS.register("bandpass_var")
+@_metric("bandpass_var", Better.HIGHER)
 def bandpass_var_criterion(
     img: Image, metric: DetailBandMetric, _logger: TextLogger
 ) -> np.floating:
@@ -99,7 +155,7 @@ def bandpass_var_criterion(
     return np.var(img_high - img_low)
 
 
-@CRITERION_FUNCTIONS.register("fft_1d")
+@_metric("fft_1d", Better.HIGHER)
 def fft_1d_criterion(
     img: Image, metric: DetailBandMetric, _logger: TextLogger
 ) -> np.floating:
@@ -134,7 +190,7 @@ def fft_1d_criterion(
     return np.sum(np.float64(np.abs(fft_line[band_i])))
 
 
-@CRITERION_FUNCTIONS.register("fft_2d")
+@_metric("fft_2d", Better.HIGHER)
 def fft_2d_criterion(
     img: Image, metric: DetailBandMetric, _logger: TextLogger
 ) -> np.floating:
@@ -172,7 +228,7 @@ def fft_2d_criterion(
     return np.sum(np.abs(fft_img) * band_mask)
 
 
-@CRITERION_FUNCTIONS.register("fft")
+@_metric("fft", Better.HIGHER)
 def fft_criterion(
     img: Image, metric: DetailBandMetric, logger: TextLogger
 ) -> np.floating:
@@ -204,31 +260,28 @@ def fft_criterion(
     )
 
 
-@CRITERION_FUNCTIONS.register("frc")
+@_metric("frc", Better.LOWER, "nm")
 def frc_criterion(img: Image, metric: FrcMetric, logger: TextLogger) -> np.floating:
     """
-    Compute the single-image Fourier ring correlation cut-off frequency.
+    Compute the resolution from single-image Fourier ring correlation.
 
-    Unlike the band-pass and FFT criteria it needs no detail band: the
-    cut-off is where the signal shared by two half-images of diagonal pixel
-    neighbours drops to noise level.
+    Unlike the band-pass and FFT criteria it needs no detail band.
 
     Args:
         img (Image): 2-D image.
         metric (FrcMetric): Metric settings (no parameters yet).
-        _logger (TextLogger): Logger to use for textual logging.
+        logger (TextLogger): Logger to use for textual logging.
 
     Returns:
-        np.floating: Cut-off frequency in 1/nm; higher values indicate a
-            sharper image.
+        np.floating: Resolution in nm; lower values indicate a sharper image.
 
     Raises:
         ValueError: If the image is not 2-D, is smaller than 16x16 pixels,
             or has no structure.
     """
     _ = metric
-    logger.debug("Starting frc criterion calculation.")
-    return np.float64(frc_cutoff_frequency(img, img.pixel_size))
+    _ = logger
+    return np.float64(frc_resolution(img, img.pixel_size))
 
 
 def gauss_filter(x: Image, px_size: float, detail: float) -> NDArray[np.floating]:

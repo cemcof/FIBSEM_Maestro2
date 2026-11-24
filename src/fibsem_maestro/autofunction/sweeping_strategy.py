@@ -18,12 +18,14 @@ from fibsem_maestro.autofunction.evaluation import (
     InterleavedEvaluation,
 )
 from fibsem_maestro.core.registry import Registry
+from fibsem_maestro.criterion.sharpness import mean_of
 
 if TYPE_CHECKING:
     from fibsem_maestro.autofunction.evaluation import SweepEvaluation
     from fibsem_maestro.autofunction.result import AutofunctionResult
     from fibsem_maestro.autofunction.sweep_space import SweepSpace
     from fibsem_maestro.autofunction.sweep_step import SweepPoint
+    from fibsem_maestro.criterion.sharpness import Sharpness
     from fibsem_maestro.settings.sweeping_settings import (
         BasicStrategy as BasicStrategySettings,
     )
@@ -92,7 +94,7 @@ class SweepingStrategy(ABC):
 
 @SWEEPING_STRATEGIES.register("basic")
 class BasicSweepingStrategy(SweepingStrategy):
-    """Measures the candidates only and picks the one with the highest mean sharpness."""
+    """Measures the candidates only and picks the one with the sharpest mean."""
 
     def __init__(self, settings: BasicStrategySettings):
         self._settings = settings
@@ -110,7 +112,7 @@ class BasicSweepingStrategy(SweepingStrategy):
 
     def evaluate(self, results: list[AutofunctionResult]) -> BasicEvaluation:
         """
-        Select the value with the highest mean sharpness over all its results.
+        Select the value with the sharpest mean over all its results.
 
         The base can only be selected if the space includes it among the
         candidates: the centre of a circle always, a linear sweep if it has an
@@ -119,21 +121,21 @@ class BasicSweepingStrategy(SweepingStrategy):
         if not results:
             raise AutofunctionError("No autofunction results provided")
 
-        by_value: dict[SweepPoint, list[float]] = defaultdict(list)
-        by_cycle: dict[int, dict[SweepPoint, list[float]]] = defaultdict(
+        by_value: dict[SweepPoint, list[Sharpness]] = defaultdict(list)
+        by_cycle: dict[int, dict[SweepPoint, list[Sharpness]]] = defaultdict(
             lambda: defaultdict(list)
         )
         for r in sorted(results, key=lambda r: r.sweep.index):
             by_value[r.sweep.value].append(r.sharpness)
             by_cycle[r.sweep.repetition][r.sweep.value].append(r.sharpness)
 
-        mean_sharpness = {v: float(np.mean(s)) for v, s in by_value.items()}
+        mean_sharpness = {v: mean_of(s) for v, s in by_value.items()}
 
         return BasicEvaluation(
-            best=max(mean_sharpness, key=lambda v: mean_sharpness[v]),
+            best=max(mean_sharpness, key=lambda v: mean_sharpness[v].score),
             mean_sharpness=mean_sharpness,
             cycle_sharpness={
-                rep: {v: float(np.mean(s)) for v, s in values.items()}
+                rep: {v: mean_of(s) for v, s in values.items()}
                 for rep, values in by_cycle.items()
             },
         )
@@ -179,8 +181,8 @@ class InterleavedSweepingStrategy(SweepingStrategy):
         Each candidate step is compared with the mean sharpness of the nearest
         base steps before and after it, so that slow drift during the sweep
         cancels out. Results sharing a step (line mode) are averaged first. A
-        candidate counts only if its sharpness exceeds that baseline by more
-        than `min_diff` (absolute difference, in the units of the selected
+        candidate counts only if it is sharper than that baseline by more
+        than `min_diff` (absolute difference, in the unit of the selected
         criterion). Missing results (failed jobs) are tolerated.
 
         The base value is the value measured most often; ties go to the
@@ -200,9 +202,7 @@ class InterleavedSweepingStrategy(SweepingStrategy):
         steps = sorted(by_step)
         value_of = {i: by_step[i][0].sweep.value for i in steps}
         repetition_of = {i: by_step[i][0].sweep.repetition for i in steps}
-        sharpness_of = {
-            i: float(np.mean([r.sharpness for r in by_step[i]])) for i in steps
-        }
+        sharpness_of = {i: mean_of(r.sharpness for r in by_step[i]) for i in steps}
 
         # the base is measured between every pair of candidates
         counts: dict[SweepPoint, int] = defaultdict(int)
@@ -224,8 +224,8 @@ class InterleavedSweepingStrategy(SweepingStrategy):
             if not neighbours:
                 continue
 
-            baseline = float(np.mean([sharpness_of[b] for b in neighbours]))
-            gain = sharpness_of[i] - baseline
+            baseline = mean_of(sharpness_of[b] for b in neighbours)
+            gain = sharpness_of[i].score - baseline.score
             comparisons.append(
                 CandidateComparison(
                     step=i,

@@ -181,6 +181,8 @@ def _draw_panel(fig: Figure, ax: Axes, panel: Panel) -> None:
             rotation=rotation,
             fontsize="small",
         )
+    if panel.invert_y:
+        ax.invert_yaxis()
     if panel.equal_aspect:
         ax.set_aspect("equal", adjustable="datalim")
     if panel.legend and ax.get_legend_handles_labels()[0]:
@@ -265,8 +267,10 @@ def _color_mapping(
         low, high = float(array.min()), float(array.max())
         if low == high:
             low, high = low - 0.5, high + 0.5
-        return _SEQUENTIAL, Normalize(low, high)
+        cmap = _SEQUENTIAL.reversed() if scale.reverse else _SEQUENTIAL
+        return cmap, Normalize(low, high)
 
     # symmetric around zero, so equal colors mean equal magnitudes on both sides
     extent = float(np.abs(array).max()) or 1.0
-    return _DIVERGING, TwoSlopeNorm(vcenter=0.0, vmin=-extent, vmax=extent)
+    cmap = _DIVERGING.reversed() if scale.reverse else _DIVERGING
+    return cmap, TwoSlopeNorm(vcenter=0.0, vmin=-extent, vmax=extent)

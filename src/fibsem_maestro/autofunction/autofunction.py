@@ -255,8 +255,8 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
         Decide whether autofunction runs on the current slice.
 
         A run in progress always continues. Otherwise autofunction is triggered if
-        the slice matches the execution frequency, or if the sharpness of the
-        linked imaging's latest frame is below `settings.sharpness_limit`.
+        the slice matches the execution frequency, or if the linked imaging's
+        latest frame is less sharp than `settings.sharpness_limit`.
 
         A triggered autofunction of any mode may have to wait: per linked
         imaging, autofunctions run one at a time. A step-mode run occupies the
@@ -297,7 +297,7 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
 
         Returns:
             True if the slice matches the execution frequency, or the latest
-            frame's sharpness is below the sharpness limit.
+            frame is less sharp than the sharpness limit.
         """
         if self._settings.execution_frequency.matches(self._ctx.slice):
             self._ctx.text_logger.info(
@@ -311,10 +311,10 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
             sharpness = self._resolve_imaging().wait_for_sharpness()
             self._ctx.text_logger.debug(f"Last image sharpness: {sharpness}.")
 
-            if sharpness is not None and sharpness < limit:
+            if sharpness is not None and sharpness.is_less_sharp_than(limit):
                 self._ctx.text_logger.info(
-                    f"'{self.name}' triggered: image sharpness ({sharpness:.4f}) "
-                    f"is below the limit ({limit:.4f})."
+                    f"'{self.name}' triggered: image sharpness ({sharpness}) "
+                    f"is worse than the limit ({sharpness.with_value(limit)})."
                 )
                 return True
 

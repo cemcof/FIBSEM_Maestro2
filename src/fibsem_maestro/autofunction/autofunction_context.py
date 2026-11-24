@@ -122,13 +122,13 @@ class AutofunctionContext:
             def _run() -> AutofunctionResult:
                 try:
                     criterion = Criterion(criterion_settings, text_logger, image_logger)
-                    value = float(criterion.calculate_sharpness(image))
-                    if np.isnan(value):
+                    sharpness = criterion.calculate_sharpness(image)
+                    if np.isnan(sharpness.value):
                         raise AutofunctionError("Sharpness calculation returned NaN")
                     text_logger.info(
-                        f"Sharpness calculation for sweep {sweep}: {value}"
+                        f"Sharpness calculation for sweep {sweep}: {sharpness}"
                     )
-                    return AutofunctionResult(value, sweep)
+                    return AutofunctionResult(sharpness, sweep)
                 except Exception as exc:
                     text_logger.warning(
                         f"Sharpness calculation for sweep {sweep.value} failed: {exc}."

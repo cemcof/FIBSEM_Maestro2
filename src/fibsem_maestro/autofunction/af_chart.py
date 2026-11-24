@@ -13,6 +13,7 @@ from fibsem_maestro.autofunction.evaluation import (
     InterleavedEvaluation,
 )
 from fibsem_maestro.autofunction.sweep_space import CircularSweepSpace, LinearSweepSpace
+from fibsem_maestro.criterion.sharpness import Better
 from fibsem_maestro.logging.image.plot import Panel, Plot, Tick
 from fibsem_maestro.logging.image.plot_element import (
     Bars,
@@ -34,6 +35,7 @@ if TYPE_CHECKING:
     )
     from fibsem_maestro.autofunction.sweep_space import SweepSpace
     from fibsem_maestro.autofunction.sweep_step import SweepPoint
+    from fibsem_maestro.criterion.sharpness import Sharpness
 
 _CYCLE_COLORS = ["#1f3a93", "#3d8fe0", "#7b3fbf", "#c2318f", "#e8473a", "#8c1d18"]
 _BASE_COLOR = "orange"
@@ -84,9 +86,10 @@ def _line_chart(
     evaluation: BasicEvaluation, space: LinearSweepSpace, base: SweepPoint | None
 ) -> Plot:
     """Sharpness over the swept value, one curve per cycle; initial and best values marked."""
+    sample = next(iter(evaluation.mean_sharpness.values()))
     elements: list[PlotElement] = []
     for rep, sharpness in evaluation.cycle_sharpness.items():
-        points = sorted((value[0], s) for value, s in sharpness.items())
+        points = sorted((value[0], s.value) for value, s in sharpness.items())
         elements.append(
             Curve(
                 x=[v for v, _ in points],
@@ -113,8 +116,9 @@ def _line_chart(
             "main": Panel(
                 elements=elements,
                 xlabel=space.attributes[0],
-                ylabel="Sharpness",
+                ylabel=_label("Sharpness", sample),
                 legend=True,
+                invert_y=_lower_is_sharper(sample),
             )
         },
         title="Autofunction criterion",
@@ -126,19 +130,25 @@ def _circle_chart(
 ) -> Plot:
     """The swept plane colored by mean sharpness, and sharpness around the circle."""
     center = base if base is not None else _centroid(list(evaluation.mean_sharpness))
+    sample = next(iter(evaluation.mean_sharpness.values()))
 
     plane = _plane_panel(
         space,
         center,
         evaluation.best,
-        evaluation.mean_sharpness,
-        ColorScale("sequential", "Mean sharpness"),
+        {v: s.value for v, s in evaluation.mean_sharpness.items()},
+        # the darkest point is always the sharpest
+        ColorScale(
+            "sequential",
+            _label("Mean sharpness", sample),
+            reverse=_lower_is_sharper(sample),
+        ),
     )
 
     profile: list[PlotElement] = []
     for rep, sharpness in evaluation.cycle_sharpness.items():
         points = sorted(
-            (space.angle_of(v, center), s)
+            (space.angle_of(v, center), s.value)
             for v, s in sharpness.items()
             # exclude the center
             if not space.is_center(v, center)
@@ -161,7 +171,9 @@ def _circle_chart(
 
     kept = space.is_center(evaluation.best, center)
     center_sharpness = [
-        s for v, s in evaluation.mean_sharpness.items() if space.is_center(v, center)
+        s.value
+        for v, s in evaluation.mean_sharpness.items()
+        if space.is_center(v, center)
     ]
     if center_sharpness:
         profile.append(
@@ -198,9 +210,10 @@ def _circle_chart(
                 elements=profile,
                 title="Sharpness around the circle",
                 xlabel=f"Angle clockwise from +{space.attributes[1]} [°]",
-                ylabel="Sharpness",
+                ylabel=_label("Sharpness", sample),
                 xticks=[Tick(a, f"{a:.0f}°") for a in [*angles, 360.0]],
                 legend=True,
+                invert_y=_lower_is_sharper(sample),
             ),
         },
         layout=[["plane", "profile"]],
@@ -212,6 +225,7 @@ def _interleaved_chart(evaluation: InterleavedEvaluation, space: SweepSpace) -> 
     """Sharpness in measurement order and the gain of every candidate over its base."""
     base, best = evaluation.base, evaluation.best
     moved = best != base
+    sample = evaluation.base_measurements[0].sharpness
     ticks = [
         Tick(c.step, space.offset_label(c.value, base)) for c in evaluation.comparisons
     ]
@@ -222,7 +236,7 @@ def _interleaved_chart(evaluation: InterleavedEvaluation, space: SweepSpace) -> 
     measured.append(
         Curve(
             x=[m.step for m in evaluation.base_measurements],
-            y=[m.sharpness for m in evaluation.base_measurements],
+            y=[m.sharpness.value for m in evaluation.base_measurements],
             color=_BASE_COLOR,
             linewidth=1.0,
             marker="o",
@@ -239,7 +253,7 @@ def _interleaved_chart(evaluation: InterleavedEvaluation, space: SweepSpace) -> 
             measured.append(
                 Points(
                     x=[c.step for c in group],
-                    y=[c.sharpness for c in group],
+                    y=[c.sharpness.value for c in group],
                     color=color,
                     linewidth=0.0,
                     label=label,
@@ -285,16 +299,17 @@ def _interleaved_chart(evaluation: InterleavedEvaluation, space: SweepSpace) -> 
         "sharpness": Panel(
             elements=measured,
             title="Measured sharpness",
-            ylabel="Sharpness",
+            ylabel=_label("Sharpness", sample),
             xticks=ticks,
             legend=True,
             sharex="gain",
+            invert_y=_lower_is_sharper(sample),
         ),
         "gain": Panel(
             elements=gain,
             title="Gain over the neighbouring base",
             xlabel=f"Candidate ({tick_meaning})",
-            ylabel="Sharpness gain",
+            ylabel=_label("Sharpness gain", sample),
             xticks=ticks,
             legend=True,
         ),
@@ -397,6 +412,16 @@ def _plane_panel(
         equal_aspect=True,
         legend=True,
     )
+
+
+def _label(name: str, sample: Sharpness) -> str:
+    """An axis label with the unit of the sharpness, e.g. `Sharpness [nm]`."""
+    return f"{name} [{sample.unit}]" if sample.unit else name
+
+
+def _lower_is_sharper(sample: Sharpness) -> bool:
+    """Whether the sharpness axis is flipped, so that sharper is always up."""
+    return sample.better is Better.LOWER
 
 
 def _cycle_separators(evaluation: InterleavedEvaluation) -> list[PlotElement]:

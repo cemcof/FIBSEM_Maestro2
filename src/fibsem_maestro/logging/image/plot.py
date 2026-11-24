@@ -40,6 +40,7 @@ class Panel:
         equal_aspect: Scale both axes equally (needed to show a circle as one).
         legend: Draw a legend of the labelled elements.
         sharex: Key of another panel of the same plot whose x-axis this one shares, or None.
+        invert_y: Draw the y-axis with its values decreasing upwards.
     """
 
     elements: Sequence[PlotElement]
@@ -50,6 +51,7 @@ class Panel:
     equal_aspect: bool = False
     legend: bool = False
     sharex: str | None = None
+    invert_y: bool = False
 
 
 @dataclass(frozen=True, kw_only=True)

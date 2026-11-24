@@ -9,12 +9,13 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from fibsem_maestro.autofunction.sweep_step import SweepPoint
+    from fibsem_maestro.criterion.sharpness import Sharpness
 
 
 @dataclass(frozen=True)
 class BasicEvaluation:
     """
-    Outcome of the basic strategy: the value with the highest mean sharpness.
+    Outcome of the basic strategy: the value with the sharpest mean.
 
     Attributes:
         best: The selected value.
@@ -24,8 +25,8 @@ class BasicEvaluation:
     """
 
     best: SweepPoint
-    mean_sharpness: Mapping[SweepPoint, float]
-    cycle_sharpness: Mapping[int, Mapping[SweepPoint, float]]
+    mean_sharpness: Mapping[SweepPoint, Sharpness]
+    cycle_sharpness: Mapping[int, Mapping[SweepPoint, Sharpness]]
 
 
 @dataclass(frozen=True)
@@ -41,7 +42,7 @@ class BaseMeasurement:
 
     step: int
     repetition: int
-    sharpness: float
+    sharpness: Sharpness
 
 
 @dataclass(frozen=True)
@@ -55,15 +56,16 @@ class CandidateComparison:
         value: The candidate value.
         sharpness: Mean sharpness of the step's results.
         baseline: Mean sharpness of the nearest base steps before and after.
-        gain: `sharpness - baseline`.
+        gain: How much sharper the candidate is than the baseline, in the
+            metric's unit; negative if it is less sharp.
         counted: True if the gain exceeded `min_diff`, so it entered the selection.
     """
 
     step: int
     repetition: int
     value: SweepPoint
-    sharpness: float
-    baseline: float
+    sharpness: Sharpness
+    baseline: Sharpness
     gain: float
     counted: bool
 

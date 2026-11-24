@@ -15,6 +15,7 @@ from fibsem_maestro.autofunction.af_chart import af_chart
 from fibsem_maestro.autofunction.autofunction import Autofunction
 from fibsem_maestro.autofunction.evaluation import InterleavedEvaluation
 from fibsem_maestro.autofunction.result import AutofunctionResult
+from fibsem_maestro.autofunction.sweep_runner import _relative_to_sharpest
 from fibsem_maestro.autofunction.sweep_space import CircularSweepSpace, LinearSweepSpace
 from fibsem_maestro.autofunction.sweep_step import SweepPoint, SweepStep
 from fibsem_maestro.autofunction.sweeping import Sweeping
@@ -24,8 +25,14 @@ from fibsem_maestro.autofunction.sweeping_strategy import (
     SweepingStrategy,
 )
 from fibsem_maestro.core.detail_band import DetailBand
+from fibsem_maestro.criterion.sharpness import Better, Sharpness
 from fibsem_maestro.logging.image.plot import Panel, Plot
-from fibsem_maestro.logging.image.plot_element import Bars, Curve, HorizontalLine
+from fibsem_maestro.logging.image.plot_element import (
+    Bars,
+    Curve,
+    HorizontalLine,
+    Points,
+)
 from fibsem_maestro.logging.image.plot_renderer import render_plot
 from fibsem_maestro.logging.text.memory import MemoryTextLogger
 from fibsem_maestro.settings.autofunction_settings import (
@@ -67,7 +74,7 @@ def _results(
         (rep, v) for rep in range(cycles) for v in strategy.generate(space, base, rep)
     ]
     return [
-        AutofunctionResult(sharpness(v), SweepStep(rep, v, i))
+        AutofunctionResult(Sharpness(sharpness(v), Better.HIGHER), SweepStep(rep, v, i))
         for i, (rep, v) in enumerate(values)
     ]
 
@@ -244,6 +251,54 @@ def test_basic_1d_chart_draws_one_curve_per_cycle() -> None:
     assert len([e for e in panel.elements if isinstance(e, Curve)]) == 3
 
 
+def _nm_results(
+    strategy: SweepingStrategy, space: LinearSweepSpace
+) -> list[AutofunctionResult]:
+    """Results of a lower-is-sharper metric in nm, sharpest at +1."""
+    values = strategy.generate(space, (0.0,), 0)
+    return [
+        AutofunctionResult(
+            Sharpness(4.0 + abs(v[0] - 1.0), Better.LOWER, "nm"), SweepStep(0, v, i)
+        )
+        for i, v in enumerate(values)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("strategy", "key"),
+    [
+        (BasicSweepingStrategy(BasicStrategySettings()), "main"),
+        (InterleavedSweepingStrategy(InterleavedStrategySettings()), "sharpness"),
+    ],
+)
+def test_chart_of_a_lower_is_sharper_metric_shows_nm_with_sharper_up(
+    strategy: SweepingStrategy, key: str
+) -> None:
+    space = LinearSweepSpace("working_distance", (-2.0, 2.0), 5)
+    evaluation = strategy.evaluate(_nm_results(strategy, space))
+
+    plot = af_chart(evaluation, space, (0.0,))
+
+    panel = plot.panels[key]
+    assert panel.invert_y
+    assert panel.ylabel is not None and "nm" in panel.ylabel
+    plotted = [y for e in panel.elements if isinstance(e, Curve) for y in e.y]
+    # the values themselves, not their scores
+    assert plotted and min(plotted) >= 4.0
+    figure = render_plot(plot)
+    assert any(ax.yaxis_inverted() for ax in figure.axes)
+
+
+def test_chart_of_a_higher_is_sharper_metric_is_not_flipped() -> None:
+    strategy = BasicSweepingStrategy(BasicStrategySettings())
+    space = LinearSweepSpace("working_distance", (-2.0, 2.0), 5)
+    evaluation = strategy.evaluate(
+        _results(strategy, space, (0.0,), _sharpest_at((1.0,)))
+    )
+
+    assert not af_chart(evaluation, space, (0.0,)).panels["main"].invert_y
+
+
 @pytest.mark.parametrize(
     "strategy",
     [
@@ -337,5 +392,36 @@ def test_basic_2d_chart_draws_the_center_as_a_line(
     # four circle points, the first again at 360°; the center has no angle
     assert curve.x == pytest.approx([0.0, 90.0, 180.0, 270.0, 360.0])
     (line,) = [e for e in profile.elements if isinstance(e, HorizontalLine)]
-    assert line.y == pytest.approx(evaluation.mean_sharpness[BASE_2D])
+    assert line.y == pytest.approx(evaluation.mean_sharpness[BASE_2D].value)
     assert line.label == label
+
+
+@pytest.mark.parametrize("better", list(Better))
+def test_2d_chart_colors_the_sharpest_point_darkest(better: Better) -> None:
+    strategy = BasicSweepingStrategy(BasicStrategySettings())
+    results = [
+        AutofunctionResult(Sharpness(abs(r.sharpness.value), better, "nm"), r.sweep)
+        for r in _results(strategy, CIRCLE, BASE_2D, _sharpest_at((3.0, 1.0)))
+    ]
+
+    plane = af_chart(strategy.evaluate(results), CIRCLE, BASE_2D).panels["plane"]
+
+    (colored,) = [e for e in plane.elements if isinstance(e, Points) and e.scale]
+    assert colored.scale is not None
+    # a sequential scale is darkest at its highest value unless reversed
+    assert colored.scale.reverse is (better is Better.LOWER)
+
+
+@pytest.mark.parametrize(
+    ("better", "values", "expected"),
+    [
+        (Better.HIGHER, [1.0, 2.0, 4.0], [0.25, 0.5, 1.0]),
+        (Better.LOWER, [4.0, 8.0, 16.0], [1.0, 0.5, 0.25]),
+    ],
+)
+def test_line_focus_plot_is_longest_at_the_sharpest_line(
+    better: Better, values: list[float], expected: list[float]
+) -> None:
+    fractions = _relative_to_sharpest([Sharpness(v, better) for v in values])
+
+    assert fractions == pytest.approx(expected)

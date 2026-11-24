@@ -98,10 +98,13 @@ class ColorScale:
         kind: "sequential" for a magnitude (one hue, light to dark), or
             "diverging" for a signed quantity (two hues around a neutral 0).
         label: Text of the color bar.
+        reverse: Map the values in the opposite direction (a sequential
+            scale then runs dark to light).
     """
 
     kind: Literal["sequential", "diverging"]
     label: str
+    reverse: bool = False
 
 
 @dataclass(frozen=True)

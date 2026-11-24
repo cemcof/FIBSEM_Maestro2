@@ -328,7 +328,7 @@ class AutofunctionSettings(BaseSettings):
     )
     sharpness_limit: Annotated[float, Field(gt=0)] | None = Field(
         default=None,
-        description="Autofunction runs if image sharpness is below this limit. If not checked, this condition is not applied.",
+        description="Autofunction runs if the image is less sharp than this limit. If not checked, this condition is not applied.",
     )
     execution_frequency: Frequency = Field(
         default_factory=Every,
