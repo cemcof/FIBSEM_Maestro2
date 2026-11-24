@@ -25,7 +25,6 @@ if TYPE_CHECKING:
 CHOICE_WIDGETS: frozenset[WidgetType] = frozenset(
     {
         WidgetType.DROPDOWN,
-        WidgetType.PROPERTY_SELECTOR,
         WidgetType.PATTERN_TYPE_SELECTOR,
         WidgetType.ACTION_SELECTOR,
         WidgetType.MULTI_ACTION_SELECTOR,
@@ -125,7 +124,7 @@ def choices_for(fi: FieldInfo, ctx: ChoiceContext) -> list[Any]:
         match hint.widget:
             case WidgetType.DROPDOWN | WidgetType.MULTI_SELECT:
                 return list(listed)
-            case WidgetType.PROPERTY_SELECTOR | WidgetType.MULTI_PROPERTY_SELECTOR:
+            case WidgetType.MULTI_PROPERTY_SELECTOR:
                 return list(listed) + list(ctx.manufacturer_property_names)
             case WidgetType.PATTERN_TYPE_SELECTOR:
                 return list(ctx.pattern_types)

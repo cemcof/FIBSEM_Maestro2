@@ -2,7 +2,7 @@
 # Copyright (c) 2024-2026 CEMCOF
 
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -60,11 +60,6 @@ class MockBeamControl(BeamControl):
         self._scanning_area = RelativeArea.full()
 
         self._image_to_beam_shift: tuple[float, float] = (1.0, 1.0)
-
-        self._manufacturer_properties: dict[str, Any] = {
-            "beam.custom_parameter": 0.0,
-            "beam.inner.parameter": 0.0,
-        }
 
         self._current_image: Image | None = None
 
@@ -267,16 +262,6 @@ class MockBeamControl(BeamControl):
     def set_mock_image(self, image: Image) -> None:
         """Set the image returned by grab_frame and get_image."""
         self._current_image = image
-
-    def manufacturer_prop(self, name: str) -> Any:
-        return self._manufacturer_properties[name]
-
-    def set_manufacturer_prop(self, name: str, value: Any) -> None:
-        self._manufacturer_properties[name] = value
-
-    @property
-    def manufacturer_prop_names(self) -> list[str]:
-        return list(self._manufacturer_properties.keys())
 
     @property
     def image_to_beam_shift(self) -> tuple[float, float]:

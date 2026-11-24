@@ -80,7 +80,6 @@ def audit(session: WorkflowSession) -> SettingsAudit:
             and hint.widget
             in (
                 WidgetType.DROPDOWN,
-                WidgetType.PROPERTY_SELECTOR,
                 WidgetType.ACTION_SELECTOR,
             )
         )

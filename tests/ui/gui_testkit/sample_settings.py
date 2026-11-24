@@ -181,12 +181,6 @@ class KitchenSink(BaseSettings):
     engine: Annotated[str, FormHint(widget=WidgetType.DROPDOWN, choices=_engines)] = (
         Field(default="fast", description="Which engine.")
     )
-    property_name: Annotated[
-        str,
-        FormHint(
-            widget=WidgetType.PROPERTY_SELECTOR, choices=lambda: ["focus", "contrast"]
-        ),
-    ] = Field(default="focus", description="One property.")
     tags: Annotated[
         list[str],
         FormHint(widget=WidgetType.MULTI_SELECT, choices=lambda: ["a", "b", "c"]),
@@ -273,7 +267,6 @@ def filled_kitchen_sink() -> KitchenSink:
         size="large",
         direction=Direction.UP,
         engine="precise",
-        property_name=VENDOR_PROPERTIES[0],
         tags=["a", "c"],
         property_names=["contrast", VENDOR_PROPERTIES[0]],
         pattern=PATTERN_TYPES[1],

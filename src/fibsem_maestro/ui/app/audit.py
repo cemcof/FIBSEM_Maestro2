@@ -49,7 +49,6 @@ RULE_WHERE = "propagation rule"
 _SINGLE_CHOICE_WIDGETS: frozenset[WidgetType] = frozenset(
     {
         WidgetType.DROPDOWN,
-        WidgetType.PROPERTY_SELECTOR,
         WidgetType.PATTERN_TYPE_SELECTOR,
         WidgetType.ACTION_SELECTOR,
     }

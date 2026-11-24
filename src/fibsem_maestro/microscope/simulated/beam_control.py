@@ -3,7 +3,7 @@
 
 
 import math
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -73,11 +73,6 @@ class SimulatedBeamControl(BeamControl):
         self._scanning_area = RelativeArea.full()
 
         self._image_to_beam_shift = (-1, 1)
-
-        self._manufacturer_properties: dict[str, Any] = {
-            "beam.custom_parameter": 1.0,
-            "beam.inner.parameter": 0.5,
-        }
 
         self._current_image: Image | None = None
 
@@ -467,20 +462,6 @@ class SimulatedBeamControl(BeamControl):
         self._txt_log.debug(f"Setting scanning area: {value}.")
         self._scanning_area = value
 
-    def manufacturer_prop(self, name: str) -> Any:
-        try:
-            value = self._manufacturer_properties[name]
-            self._txt_log.debug(f"Getting manufacturer property '{name}': {value}.")
-            return value
-        except KeyError as e:
-            raise MicroscopeError(
-                f"Internal property {name} does not exist for the simulated beam"
-            ) from e
-
-    def set_manufacturer_prop(self, name: str, value: Any) -> Any:
-        self._txt_log.debug(f"Setting manufacturer property '{name}': {value}.")
-        self._manufacturer_properties[name] = value
-
     @property
     def image_to_beam_shift(self) -> tuple[float, float]:
         return self._image_to_beam_shift
@@ -506,10 +487,6 @@ class SimulatedBeamControl(BeamControl):
             v += self._rng.normal(0.0, abs_noise)
 
         return min(max(v, lo), hi)
-
-    @property
-    def manufacturer_prop_names(self) -> list[str]:
-        return list(self._manufacturer_properties.keys())
 
     @property
     def txt_log(self) -> TextLogger:

@@ -13,10 +13,6 @@ from fibsem_maestro.core.beam_type import BeamType
 from fibsem_maestro.core.detector_mode import DetectorMode
 from fibsem_maestro.core.resolution import Resolution
 from fibsem_maestro.logging.text.memory import MemoryTextLogger
-from fibsem_maestro.microscope.autoscript_control.beam_control import (
-    AutoscriptElectronBeamControl,
-    AutoscriptIonBeamControl,
-)
 from fibsem_maestro.microscope.error import MicroscopeError
 from fibsem_maestro.microscope.microscope import Microscope
 from fibsem_maestro.properties.beam_properties import BeamProperties
@@ -99,19 +95,6 @@ def test_autoscript_reapplying_pixel_size_keeps_standard_resolution(
 
     assert beam.resolution == Resolution(1024, 884)
     assert fake_client.beams.electron_beam.scanning.resolution.value == "1024x884"
-
-
-@pytest.mark.parametrize(
-    "beam_cls", [AutoscriptElectronBeamControl, AutoscriptIonBeamControl]
-)
-def test_beam_manufacturer_properties_belong_to_that_beam(beam_cls: type) -> None:
-    beam = beam_cls(SdbMicroscopeClient(), MemoryTextLogger(lambda: 0))
-    names = beam.manufacturer_prop_names
-
-    assert names, "the beam's own properties must still be discovered"
-    assert not [n for n in names if "application_client" in n]
-    assert "beam_current.value" in names
-    assert "scanning.dwell_time.value" in names
 
 
 def test_microscope_manufacturer_properties_have_one_path_each() -> None:

@@ -417,7 +417,7 @@ def _finish_leaf(editor: FieldEditor[Any], request: EditorRequest) -> FieldEdito
 
 
 def _choice_dropdown(request: EditorRequest) -> FieldEditor[Any]:
-    """DROPDOWN, PROPERTY_SELECTOR and PATTERN_TYPE_SELECTOR."""
+    """DROPDOWN and PATTERN_TYPE_SELECTOR."""
     fi = request.field
     editor = EnumWidget(
         choices_for(fi, request.ctx.choice_context()),
@@ -668,7 +668,6 @@ def default_registry() -> EditorRegistry:
     registry = EditorRegistry()
 
     registry.register_hint(WidgetType.DROPDOWN, _choice_dropdown)
-    registry.register_hint(WidgetType.PROPERTY_SELECTOR, _choice_dropdown)
     registry.register_hint(WidgetType.PATTERN_TYPE_SELECTOR, _choice_dropdown)
     registry.register_hint(WidgetType.MULTI_SELECT, _multi_select)
     registry.register_hint(WidgetType.MULTI_PROPERTY_SELECTOR, _multi_select)

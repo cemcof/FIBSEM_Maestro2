@@ -14,7 +14,6 @@ from fibsem_maestro.microscope.error import MicroscopeError
 from fibsem_maestro.microscope.registry import MICROSCOPE_CONTROLS
 from fibsem_maestro.properties.global_properties import GlobalProperties
 from fibsem_maestro.properties.microscope_properties import MicroscopeProperties
-from fibsem_maestro.settings.property_names import PropertyNames
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -27,6 +26,7 @@ if TYPE_CHECKING:
     )
     from fibsem_maestro.properties.beam_properties import BeamProperties
     from fibsem_maestro.settings.microscope_settings import MicroscopeSettings
+    from fibsem_maestro.settings.property_names import PropertyNames
 
 
 class Microscope:
@@ -309,29 +309,6 @@ class Microscope:
         """
         beam = beam or self.beam
         self.set_beam_shift_without_stage_fallback(beam.beam_shift + delta, beam)
-
-    @property
-    def prop_names(self) -> PropertyNames:
-        """
-        All available property names across the microscope and both beams.
-
-        Includes standard `MicroscopeProperties` fields, manufacturer-specific
-        properties exposed by the control, and the property names of both beams.
-
-        Returns:
-            A `PropertyNames` instance listing all available property names.
-        """
-        properties = list(MicroscopeProperties.model_fields.keys())
-        properties.extend(self._control.manufacturer_prop_names)
-
-        electron_properties = self._control.electron_beam.prop_names
-        ion_properties = self._control.ion_beam.prop_names
-
-        return PropertyNames(
-            microscope=properties,
-            electron_beam=electron_properties,
-            ion_beam=ion_properties,
-        )
 
     def set_properties(
         self, properties: GlobalProperties, beam: BeamType | None

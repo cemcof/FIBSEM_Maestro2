@@ -6,7 +6,7 @@ import time
 from abc import abstractmethod
 from functools import cached_property
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
+from typing import TYPE_CHECKING, ClassVar, TypeVar
 
 from autoscript_sdb_microscope_client.enumerations import (
     ImageFileFormat,
@@ -34,9 +34,6 @@ from fibsem_maestro.core.resolution import Resolution
 from fibsem_maestro.core.source_tilt import SourceTilt
 from fibsem_maestro.core.stigmator import Stigmator
 from fibsem_maestro.microscope.abstract_control.beam_control import BeamControl
-from fibsem_maestro.microscope.autoscript_control.manufacturer_props import (
-    AutoscriptManufacturerPropertiesRegistry,
-)
 from fibsem_maestro.microscope.error import MicroscopeError
 
 if TYPE_CHECKING:
@@ -87,9 +84,6 @@ class AutoscriptBeamControl[BeamT: (ElectronBeamAs, IonBeamAs)](BeamControl):
         txt_log: TextLogger,
     ):
         self._microscope = autoscript_microscope
-        self._manufacturer_properties = AutoscriptManufacturerPropertiesRegistry(
-            self._beam
-        )
         self._txt_log = txt_log
 
         self._extended_resolution: Resolution | None = (
@@ -594,25 +588,6 @@ class AutoscriptBeamControl[BeamT: (ElectronBeamAs, IonBeamAs)](BeamControl):
     def beam_current(self, value: float) -> None:
         self._txt_log.debug(f"Setting beam current ({self._modality}): {value} nA.")
         self._beam.beam_current.value = value * 1e-9
-
-    def manufacturer_prop(self, name: str) -> Any:
-        property = self._manufacturer_properties.get(name)
-        value = property.get()
-        self._txt_log.debug(
-            f"Getting manufacturer property '{name}' ({self._modality}): {value}."
-        )
-        return value
-
-    def set_manufacturer_prop(self, name: str, value: Any) -> None:
-        self._txt_log.debug(
-            f"Setting manufacturer property '{name}' ({self._modality}): {value}."
-        )
-        property = self._manufacturer_properties.get(name)
-        property.set(value)
-
-    @property
-    def manufacturer_prop_names(self) -> list[str]:
-        return self._manufacturer_properties.allowed()
 
     @property
     def txt_log(self) -> TextLogger:

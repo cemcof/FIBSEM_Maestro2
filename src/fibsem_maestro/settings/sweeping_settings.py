@@ -73,8 +73,7 @@ TargetAttribute = Annotated[
     str,
     AfterValidator(_check_scalar),
     FormHint(
-        widget=WidgetType.PROPERTY_SELECTOR,
-        # manufacturer properties are added dynamically
+        widget=WidgetType.DROPDOWN,
         choices=lambda: [
             name
             for name in BeamProperties.model_fields

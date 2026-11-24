@@ -16,7 +16,6 @@ if TYPE_CHECKING:
 class WidgetType(Enum):
     DROPDOWN = "dropdown"
     MULTI_SELECT = "multi_select"
-    PROPERTY_SELECTOR = "property_selector"
     MULTI_PROPERTY_SELECTOR = "multi_property_selector"
     AREA_SELECT = "area_select"
     RANGE_PAIR = "range_pair"

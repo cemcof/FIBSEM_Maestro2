@@ -3,7 +3,7 @@
 
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from fibsem_maestro.core.lens_alignment import LensAlignment
 from fibsem_maestro.core.stigmator import Stigmator
@@ -454,28 +454,6 @@ class BeamControl(ABC):
             value: Scanning area in relative coordinates.
         """
 
-    @abstractmethod
-    def manufacturer_prop(self, name: str) -> Any:
-        """
-        Retrieve a manufacturer-specific beam property by name.
-
-        Args:
-            name: Property name as defined by the manufacturer.
-
-        Returns:
-            The current value of the property.
-        """
-
-    @abstractmethod
-    def set_manufacturer_prop(self, name: str, value: Any) -> None:
-        """
-        Set a manufacturer-specific beam property by name.
-
-        Args:
-            name: Property name as defined by the manufacturer.
-            value: New property value.
-        """
-
     @property
     @abstractmethod
     def image_to_beam_shift(self) -> tuple[float, float]:
@@ -492,11 +470,6 @@ class BeamControl(ABC):
         Returns:
             A `(min, max)` tuple of the allowed value range.
         """
-
-    @property
-    @abstractmethod
-    def manufacturer_prop_names(self) -> list[str]:
-        """Names of all manufacturer-specific properties available on this beam."""
 
     @property
     @abstractmethod
@@ -529,56 +502,26 @@ class BeamControl(ABC):
             self.detector_brightness = brightness_backup
             self.unblank()
 
-    @property
-    def prop_names(self) -> list[str]:
-        """
-        All available property names, including manufacturer-specific ones.
-
-        Combines the standard `BeamProperties` field names with any
-        manufacturer-specific property names exposed by the control.
-
-        Returns:
-            A list of all property names available on this beam.
-        """
-        properties = list(BeamProperties.model_fields.keys())
-        properties.extend(self.manufacturer_prop_names)
-
-        return properties
-
     def set_properties(self, properties: BeamProperties) -> None:
         """
         Apply a set of beam properties to this beam control.
 
         Iterates over the non-None fields of `properties` and applies each
-        one via the corresponding setter. Manufacturer-specific properties are
-        routed to `set_manufacturer_prop`. Fields without a setter raise a
+        one via the corresponding setter. Fields without a setter raise a
         `MicroscopeError`.
 
         Args:
             properties: Container of beam property values to apply.
 
         Raises:
-            MicroscopeError: If a manufacturer property cannot be set, or if a
-                field has no corresponding setter.
+            MicroscopeError: If a field has no corresponding setter.
         """
         field_names = list(properties.model_dump(exclude_none=True).keys())
-        manufacturer_properties = self.manufacturer_prop_names
 
-        # set the pre-defined properties
         for field_name in field_names:
             value = getattr(properties, field_name)
             if value is None:
                 continue
-
-            # if the property is a manufacturer property
-            if field_name in manufacturer_properties:
-                try:
-                    self.set_manufacturer_prop(field_name, value)
-                    continue
-                except Exception as e:
-                    raise MicroscopeError(
-                        f"Could not set manufacturer property '{field_name}': {e}"
-                    ) from e
 
             # check whether a setter exists for this property
             attr = getattr(type(self), field_name, None)
@@ -592,8 +535,7 @@ class BeamControl(ABC):
         Read selected beam properties and return them as a `BeamProperties` instance.
 
         Collects only the properties whose names appear in `selected`.
-        Standard `BeamProperties` fields are read via their property accessors;
-        manufacturer-specific properties are retrieved via `manufacturer_prop`.
+        Standard `BeamProperties` fields are read via their property accessors.
         Unknown names are logged as warnings and excluded from the result.
 
         Args:
@@ -611,10 +553,6 @@ class BeamControl(ABC):
         values = {}
         for field_name in field_names:
             values[field_name] = getattr(self, field_name)
-
-        # collect manufacturer properties
-        for field_name in filter(lambda x: x in selected, self.manufacturer_prop_names):
-            values[field_name] = self.manufacturer_prop(field_name)
 
         # get unknown properties
         unknown = [prop for prop in selected if prop not in values]

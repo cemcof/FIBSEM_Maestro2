@@ -25,6 +25,8 @@ from pydantic import Field, ValidationError
 from fibsem_maestro.action.registry import ACTION_REGISTRY
 from fibsem_maestro.settings.base_settings import BaseSettings
 from fibsem_maestro.settings.form_utils import WidgetType
+from fibsem_maestro.settings.property_names import PropertyNames
+from fibsem_maestro.settings.sweeping_settings import CircularSweeping, LinearSweeping
 from fibsem_maestro.ui.schema.choices import ChoiceContext, choices_for, has_choices
 from fibsem_maestro.ui.schema.constraints import Bound, NumericBounds
 from fibsem_maestro.ui.schema.field_type import (
@@ -69,7 +71,7 @@ def test_field_info_carries_label_description_unit_and_hint() -> None:
     assert (width.label, width.description) == ("width", "How wide.")
     assert width.unit is not None and width.unit.suffix == "nm"
     assert width.hint is None
-    assert _info(KitchenSink, "property_name").label == "property name"
+    assert _info(KitchenSink, "property_names").label == "property names"
     assert window.hint is not None and window.hint.widget is WidgetType.RANGE_PAIR
 
 
@@ -150,7 +152,6 @@ def choice_context(linked_action: Action) -> ChoiceContext:
         ("color", list(Color)),
         ("size", ["small", "large"]),
         ("engine", ["fast", "precise", "turbo"]),
-        ("property_name", ["focus", "contrast", *VENDOR_PROPERTIES]),
         ("tags", ["a", "b", "c"]),
         ("property_names", ["focus", "contrast", *VENDOR_PROPERTIES]),
         ("pattern", list(PATTERN_TYPES)),
@@ -163,6 +164,25 @@ def test_choices_for_lists_what_the_editor_offers(
 
     assert has_choices(fi)
     assert choices_for(fi, choice_context) == expected
+
+
+@pytest.mark.parametrize(
+    ("cls", "name", "offered"),
+    [
+        (PropertyNames, "microscope", True),
+        (PropertyNames, "electron_beam", False),
+        (PropertyNames, "ion_beam", False),
+        (LinearSweeping, "target_attribute", False),
+        (CircularSweeping, "target_attribute_x", False),
+    ],
+)
+def test_choices_for_offers_manufacturer_properties_only_to_the_microscope(
+    choice_context: ChoiceContext, cls: type, name: str, offered: bool
+) -> None:
+    # their names are paths from the microscope, which a beam does not resolve
+    choices = choices_for(_info(cls, name), choice_context)
+
+    assert all((vendor in choices) is offered for vendor in VENDOR_PROPERTIES)
 
 
 def test_choices_for_action_selector_lists_actions_of_allowed_types(

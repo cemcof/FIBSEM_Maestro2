@@ -23,14 +23,14 @@ class PropertyNames(BaseSettings):
     electron_beam: Annotated[
         list[str],
         FormHint(
-            widget=WidgetType.MULTI_PROPERTY_SELECTOR,
+            widget=WidgetType.MULTI_SELECT,
             choices=lambda: list(BeamProperties.model_fields.keys()),
         ),
     ] = Field(default_factory=list)
     ion_beam: Annotated[
         list[str],
         FormHint(
-            widget=WidgetType.MULTI_PROPERTY_SELECTOR,
+            widget=WidgetType.MULTI_SELECT,
             choices=lambda: list(BeamProperties.model_fields.keys()),
         ),
     ] = Field(default_factory=list)
