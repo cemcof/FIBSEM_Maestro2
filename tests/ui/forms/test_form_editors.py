@@ -31,7 +31,6 @@ from gui_testkit.sample_settings import (
     filled_kitchen_sink,
 )
 from PyQt6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QPushButton,
@@ -112,20 +111,24 @@ def test_optional_number_is_none_until_ticked(live_form: Callable[..., Form]) ->
     assert settings.limit is None
 
 
-def test_optional_choice_offers_none_entry_without_checkbox(
+def test_optional_choice_has_checkbox_and_no_none_entry(
     live_form: Callable[..., Form],
 ) -> None:
     settings = Optionals()
     form = live_form(settings)
-    combo = field_at(form.widget, "color")
+    wrapper = field_at(form.widget, "color")
+    combo = editor_at(form.widget, "color")
     assert isinstance(combo, QComboBox)
 
-    assert combo_texts(combo) == ["(none)", "red", "green", "blue"]
-    assert children(combo, QCheckBox) == []
+    # "(none)" was easily mistaken for an enum member named "None"
+    assert combo_texts(combo) == ["red", "green", "blue"]
+    assert not combo.isVisibleTo(form.widget)
 
-    combo.setCurrentIndex(2)
+    optional_checkbox(wrapper).click()
+    assert settings.color is not None and settings.color.value == "red"
+    combo.setCurrentIndex(1)
     assert settings.color is not None and settings.color.value == "green"
-    combo.setCurrentIndex(0)
+    optional_checkbox(wrapper).click()
     assert settings.color is None
 
 

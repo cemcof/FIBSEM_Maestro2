@@ -566,14 +566,14 @@ def _str(request: EditorRequest) -> FieldEditor[Any]:
 
 
 def _choice(request: EditorRequest) -> FieldEditor[Any]:
-    """EnumType and LiteralType: optionality is a "(none)" entry, never a checkbox."""
-    fi = request.field
-    editor = EnumWidget(
-        choices_for(fi, request.ctx.choice_context()),
-        default=request.value,
-        optional=fi.optional,
-    )
-    return connect_leaf(editor, request)
+    """EnumType and LiteralType: an optional one gets a checkbox."""
+    choices = choices_for(request.field, request.ctx.choice_context())
+    default = request.value
+    # shown once the checkbox is ticked
+    if default is None and choices:
+        default = choices[0]
+    editor = EnumWidget(choices, default=default)
+    return optional_wrap(editor, request, inline=True)
 
 
 def _dataclass(request: EditorRequest) -> FieldEditor[Any]:

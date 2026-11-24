@@ -302,7 +302,7 @@ class Optionals(BaseSettings):
     limit: Annotated[float, Field(gt=0)] | None = Field(
         default=None, description="Checkbox beside a number."
     )
-    color: Color | None = Field(default=None, description="A '(none)' entry.")
+    color: Color | None = Field(default=None, description="Checkbox beside a choice.")
     choice: Annotated[
         str | None, FormHint(widget=WidgetType.DROPDOWN, choices=lambda: ["x", "y"])
     ] = Field(default=None, description="Checkbox and a '(none)' entry.")
