@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from itertools import pairwise
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated
 
 import pytest
 from gui_testkit.forms import editor_at, field_at, optional_checkbox
@@ -22,10 +22,12 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QStyleOptionViewItem,
     QToolTip,
+    QVBoxLayout,
     QWidget,
 )
 
 from fibsem_maestro.settings.base_settings import BaseSettings
+from fibsem_maestro.settings.form_utils import FormHint, WidgetType
 from fibsem_maestro.ui.forms.editors._no_scroll import SPIN_BOX_TEXT_INSET
 from fibsem_maestro.ui.forms.editors.checklist import (
     CHECKLIST_MAX_ROWS,
@@ -67,6 +69,15 @@ class OptionalGroups(BaseSettings):
 
     first: Leaf | None = Field(default=None)
     second: Leaf | None = Field(default=None)
+
+
+class ChecklistAndNumber(BaseSettings):
+    """A checklist above a number: a short form in a tall panel."""
+
+    tags: Annotated[
+        list[str], FormHint(widget=WidgetType.MULTI_SELECT, choices=lambda: ["a", "b"])
+    ] = Field(default_factory=list)
+    limit: float = Field(default=1.0)
 
 
 @pytest.fixture
@@ -446,3 +457,55 @@ def test_multi_select_name_beyond_the_width_limit_shows_whole_in_its_tooltip(
     assert widget.width() <= CHECKLIST_MAX_WIDTH
     assert delegate.helpEvent(event, widget, option, widget.indexFromItem(item))
     assert QToolTip.text() == name
+
+
+def test_short_form_with_a_checklist_keeps_its_height_in_a_tall_panel(
+    qtbot: QtBot,
+    form_builder: FormBuilder,
+    sink_context: FormContext,
+    show_widget: Callable[[QWidget], None],
+) -> None:
+    # an expanding checklist made the whole form expand; its rows took the
+    # spare height and their editors moved away from their labels
+    form = form_builder.build_live(ChecklistAndNumber(), sink_context)
+    panel = QWidget()
+    layout = QVBoxLayout(panel)
+    layout.addWidget(form.widget)
+    layout.addStretch()
+    panel.resize(800, 900)
+    show_widget(panel)
+    qtbot.wait(20)
+
+    assert form.widget.height() == form.widget.sizeHint().height()
+
+
+def test_editor_stays_beside_its_label_in_a_taller_row(
+    shown_form: Callable[[BaseSettings], Form],
+) -> None:
+    # the form fills the tall scroll area, so its rows are taller than needed
+    form = shown_form(ChecklistAndNumber())
+    root = form.widget
+    label = root.field_label("limit")
+    editor = field_at(root, "limit")
+    assert label is not None and isinstance(editor, QWidget)
+    spin_box = editor.findChild(QAbstractSpinBox)
+    assert spin_box is not None
+
+    assert abs(_rect_in(spin_box, root).top() - _rect_in(label, root).top()) <= 1
+
+
+def test_checklist_does_not_make_its_container_expand(
+    qtbot: QtBot, show_widget: Callable[[QWidget], None]
+) -> None:
+    # a list expands by default, and so does a layout holding it
+    container = QWidget()
+    QVBoxLayout(container).addWidget(MultiSelectWidget(["a", "b"]))
+    panel = QWidget()
+    layout = QVBoxLayout(panel)
+    layout.addWidget(container)
+    layout.addStretch()
+    panel.resize(400, 900)
+    show_widget(panel)
+    qtbot.wait(20)
+
+    assert container.height() == container.sizeHint().height()

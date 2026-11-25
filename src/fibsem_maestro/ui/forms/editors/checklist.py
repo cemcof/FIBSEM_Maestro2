@@ -17,6 +17,7 @@ from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetrics, QHelpEvent, QPainte
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QListWidget,
+    QSizePolicy,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
@@ -339,6 +340,11 @@ def make_checklist(widget: QListWidget) -> None:
     """
     widget.setItemDelegate(ChecklistDelegate(widget))
     widget.setMouseTracking(True)
+    # a list expands by default, and so would the form holding it: its spare
+    # height went to the other rows, which moved away from their labels
+    policy = widget.sizePolicy()
+    policy.setVerticalPolicy(QSizePolicy.Policy.Fixed)
+    widget.setSizePolicy(policy)
     widget.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
     # rows differ in width, which sets the list's
     widget.setUniformItemSizes(False)

@@ -212,12 +212,12 @@ class ObjectWidget(QWidget, FieldEditor[T]):
             # unaligned, it would cap the editor column, and the label column
             # would take the spare width and push the editors off the common column
             limited = editor.maximumWidth() < QWIDGETSIZE_MAX
-            self._layout.addWidget(
-                editor,
-                self._row_count,
-                1,
-                Qt.AlignmentFlag.AlignLeft if limited else Qt.AlignmentFlag(0),
-            )
+            # at the top of its row, beside its label, if the row is given
+            # more height than the editor needs
+            alignment = Qt.AlignmentFlag.AlignTop
+            if limited:
+                alignment |= Qt.AlignmentFlag.AlignLeft
+            self._layout.addWidget(editor, self._row_count, 1, alignment)
             # a row holding only a hidden widget takes no space
             self._layout.addWidget(message, self._row_count + 1, 1)
         self._row_count += 2
