@@ -4,6 +4,7 @@
 
 import builtins
 import inspect
+import itertools
 from typing import TYPE_CHECKING
 
 from fibsem_maestro.microscope.abstract_control.manufacturer_props import (
@@ -170,13 +171,42 @@ def _properties_with_setters(cls: type) -> list[str]:
     return names
 
 
+def _read_only_properties(obj: object) -> Iterable[tuple[str, object]]:
+    """
+    Iterate over the public properties without a setter of an object, with their values.
+
+    Properties whose getter raises are skipped.
+
+    Args:
+        obj (object): Instance whose properties should be read.
+
+    Yields:
+        tuple[str, object]: Pairs of `(property_name, value)`.
+    """
+    seen: set[str] = set()
+    for base in inspect.getmro(type(obj)):
+        for name, attr in vars(base).items():
+            if name in seen or name.startswith("_"):
+                continue
+            seen.add(name)
+            if not isinstance(attr, builtins.property) or attr.fset is not None:
+                continue
+            try:
+                value = getattr(obj, name)
+            except Exception:
+                continue
+            yield name, value
+
+
 def find_manufacturer_properties(root: object) -> list[ManufacturerProperty]:
     """
     Discover writable properties reachable from a root object.
 
-    The object graph is traversed through member variables only.
-    Paths are constructed using member names without leading underscores
-    and contain no class or type names.
+    The object graph is traversed through member variables, and on the root
+    also through its public read-only properties (e.g. the subsystems of a
+    microscope client, such as `detector`). Paths are constructed using
+    member and property names without leading underscores and contain no
+    class or type names.
 
     Args:
         root (object): Root object from which traversal begins.
@@ -201,7 +231,13 @@ def find_manufacturer_properties(root: object) -> list[ManufacturerProperty]:
                 ManufacturerProperty(owner=obj, owner_path=obj_path, name=prop_name)
             )
 
-        for member_name, child in _iter_instance_members(obj):
+        members = _iter_instance_members(obj)
+        if obj is root:
+            # some subsystems of the client (e.g. the detector) are no members
+            # of it, so they would be missed: `application_client` is not followed
+            members = itertools.chain(members, _read_only_properties(obj))
+
+        for member_name, child in members:
             if member_name in _SHARED_MEMBERS:
                 continue
             if _is_traversable_instance(child):
