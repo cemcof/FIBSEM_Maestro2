@@ -173,9 +173,14 @@ class TemplateMatching:
             # copy templates from the current slice
             self.copy_templates(self._image_store, self._image_store.next)
 
-    def calculate_drift(self) -> Drift:
+    def calculate_drift(self, whole_frame: bool = False) -> Drift:
         """
         Calculate the image drift relative to the stored templates.
+
+        Args:
+            whole_frame: Search the templates in the whole frame, at pixel
+                precision and without `maximal_drift`, instead of in the
+                search regions around their areas.
 
         Returns:
             A `Drift` instance containing the x and y shift in nanometers
@@ -183,34 +188,49 @@ class TemplateMatching:
             matches fall below the confidence threshold, `x` and `y` are
             `None`.
         """
-        self._txt_log.info("Obtaining search regions for template matching.")
-        search_regions = self._area_provider.acquire_search_regions()
+        if whole_frame:
+            self._txt_log.info(
+                "Searching the whole frame for the templates, at pixel precision "
+                "and without the maximal drift."
+            )
+            frame = self._area_provider.acquire_full_frame()
+            matches = self._calculate_whole_frame_matches(frame)
+            pixel_size = frame.pixel_size
+            max_drift = None
+        else:
+            self._txt_log.info("Obtaining search regions for template matching.")
+            search_regions = self._area_provider.acquire_search_regions()
 
-        # perform template matching for each template
-        match self._settings.matching_mode:
-            case StandardMode():
-                self._txt_log.debug("Calculating template match in pixel resolution.")
-                matches = self._calculate_template_matches(
-                    search_regions, self._calculate_match
-                )
-            case SubpixelMode():
-                self._txt_log.debug(
-                    "Calculating template match in sub-pixel resolution."
-                )
-                matches = self._calculate_template_matches(
-                    search_regions, self._calculate_subpixel_match
-                )
+            # perform template matching for each template
+            match self._settings.matching_mode:
+                case StandardMode():
+                    self._txt_log.debug(
+                        "Calculating template match in pixel resolution."
+                    )
+                    matches = self._calculate_template_matches(
+                        search_regions, self._calculate_match
+                    )
+                case SubpixelMode():
+                    self._txt_log.debug(
+                        "Calculating template match in sub-pixel resolution."
+                    )
+                    matches = self._calculate_template_matches(
+                        search_regions, self._calculate_subpixel_match
+                    )
+
+            frame = self._area_provider.last_full_frame
+            pixel_size = search_regions[0].pixel_size
+            max_drift = self._settings.maximal_drift
 
         # log the results of template matching
         self._log_heatmaps(matches)
 
         # log shifts in the image only if full frame has been acquired
-        if (frame := self._area_provider.last_full_frame) is not None:
+        if frame is not None:
             self._log_image_shifts(frame, matches)
 
         # get image shift from template matching results
-        pixel_size = search_regions[0].pixel_size
-        shift = self._matches_to_image_shift(matches, pixel_size)
+        shift = self._matches_to_image_shift(matches, pixel_size, max_drift)
 
         # average confidence of the individual template matches
         confidence = self._get_average_confidence(matches)
@@ -239,7 +259,7 @@ class TemplateMatching:
             index += 1
 
     def _calculate_match(
-        self, template: Image8Bit, image: Image8Bit
+        self, template: Image8Bit, image: Image8Bit, expected: PixelPoint | None = None
     ) -> TemplateMatchResult[int]:
         """
         Compute the normalized cross-correlation between `template` and `image`.
@@ -253,10 +273,12 @@ class TemplateMatching:
             template: Reference patch to locate within `image`.
             image: Image region to search; must be larger than `template` by at
                 least the expected drift on each side.
+            expected: Top-left corner of the template in `image` without
+                drift, in pixels; None if the template lies in its centre.
 
         Returns:
             A `TemplateMatchResult` containing the pixel displacement
-            `(dx, dy)` from the image centre to the best-match location,
+            `(dx, dy)` from the expected location to the best-match location,
             together with the peak normalised cross-correlation score and the
             full heatmap array.
         """
@@ -273,12 +295,13 @@ class TemplateMatching:
 
         best_x, best_y = max_loc
 
-        # center of correlation map
-        center_x = heatmap.shape[1] // 2
-        center_y = heatmap.shape[0] // 2
+        # the heatmap is indexed by the template's top-left corner; without
+        # drift a centred template lies at the centre of the heatmap
+        if expected is None:
+            expected = PixelPoint(x=heatmap.shape[1] // 2, y=heatmap.shape[0] // 2)
 
-        dx = best_x - center_x  # horizontal shift
-        dy = best_y - center_y  # vertical shift
+        dx = best_x - expected.x  # horizontal shift
+        dy = best_y - expected.y  # vertical shift
 
         return TemplateMatchResult(
             dx=dx,
@@ -435,6 +458,28 @@ class TemplateMatching:
         )
         self._save_template(averaged, index=area_index, image_store=store)
 
+    def _calculate_whole_frame_matches(
+        self, frame: Image8Bit
+    ) -> list[TemplateMatchResult[int]]:
+        """
+        Locate each template in a whole frame, at pixel precision.
+
+        Args:
+            frame: The full frame to search.
+
+        Returns:
+            One `TemplateMatchResult` per configured template area, in the
+            same order as `settings.areas`.
+        """
+        return [
+            self._calculate_match(
+                self._load_template(i),
+                frame,
+                expected=area.to_pixels(frame.resolution).origin,
+            )
+            for i, area in enumerate(self._settings.areas)
+        ]
+
     def _calculate_template_matches(
         self,
         search_regions: list[Image8Bit],
@@ -461,7 +506,10 @@ class TemplateMatching:
         return matches
 
     def _matches_to_image_shift(
-        self, matches: list[TemplateMatchResult[ShiftPrecision]], pixel_size: float
+        self,
+        matches: list[TemplateMatchResult[ShiftPrecision]],
+        pixel_size: float,
+        max_drift: float | None,
     ) -> tuple[float, float] | None:
         """
         Convert template match results to a mean image shift in nanometers.
@@ -473,6 +521,8 @@ class TemplateMatching:
         Args:
             matches: Template match results, one per configured area.
             pixel_size: Physical size of one pixel in nanometers.
+            max_drift: Largest accepted drift of a match in nanometers; None
+                for no limit.
 
         Returns:
             A `(dx_nm, dy_nm)` tuple representing the mean image shift, or
@@ -501,9 +551,7 @@ class TemplateMatching:
 
             # ignore matches for which the drift is too large
             drift = np.sqrt(dx_nm**2 + dy_nm**2)
-            if (
-                max_drift := self._settings.maximal_drift
-            ) is not None and drift > max_drift:
+            if max_drift is not None and drift > max_drift:
                 self._txt_log.warning(
                     f"Drift ({drift}) is too large (limit: {max_drift}). "
                     f"Ignoring match for template {i}."

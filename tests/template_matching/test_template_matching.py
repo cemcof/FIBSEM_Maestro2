@@ -14,6 +14,7 @@ from fibsem_maestro.core.image import Image8Bit
 from fibsem_maestro.core.point import RelativePoint
 from fibsem_maestro.logging.image.memory import MemoryImageLogger
 from fibsem_maestro.logging.text.memory import MemoryTextLogger
+from fibsem_maestro.microscope.positioning_outcome import PositioningOutcome
 from fibsem_maestro.settings.drift_correction_settings import (
     TemplateMatchingDriftCorrection,
 )
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from fibsem_maestro.action.action import Action
+    from fibsem_maestro.core.drift import Drift
     from fibsem_maestro.workflow.workflow import Workflow
 
 PIXEL_SIZE_NM = 10.0
@@ -80,11 +82,16 @@ class ScriptedAreaProvider(AreaProvider):
             for area in self._settings.areas
         ]
 
+    def acquire_full_frame(self) -> Image8Bit:
+        return self._frames.pop(0)
+
 
 def _matcher(
-    settings: TemplateMatchingSettings, frames: list[Image8Bit]
+    settings: TemplateMatchingSettings,
+    frames: list[Image8Bit],
+    log: MemoryTextLogger | None = None,
 ) -> TemplateMatching:
-    log = MemoryTextLogger(lambda: 0)
+    log = log or MemoryTextLogger(lambda: 0)
     return TemplateMatching(
         ScriptedAreaProvider(settings, log, frames),
         settings,
@@ -188,3 +195,101 @@ def test_template_scan_drift_limit_is_in_nanometers() -> None:
         areas=[AREA], template_scans=2, maximal_drift=50.0
     )
     _matcher(lenient, [_scene(), _scene(3.0, 0.0)]).create_templates()
+
+
+# away from the centre of the frame, which the whole-frame search must not assume
+OFF_CENTRE_AREA = RelativeArea(origin=RelativePoint(0.1, 0.6), width=0.2, height=0.2)
+
+
+def _whole_frame_drift_px(
+    settings: TemplateMatchingSettings, dx: float, dy: float
+) -> tuple[float | None, float | None]:
+    matcher = _matcher(settings, [_scene(), _scene(dx, dy)])
+    matcher.create_templates()
+    drift = matcher.calculate_drift(whole_frame=True)
+    if drift.x is None or drift.y is None:
+        return None, None
+    return drift.x / PIXEL_SIZE_NM, drift.y / PIXEL_SIZE_NM
+
+
+def test_whole_frame_search_finds_a_shift_beyond_the_margin_and_maximal_drift() -> None:
+    # 40 px is 400 nm: far beyond a 20 nm margin and a 50 nm maximal drift
+    settings = TemplateMatchingSettings(
+        areas=[OFF_CENTRE_AREA], correction_margin=20.0, maximal_drift=50.0
+    )
+
+    assert _whole_frame_drift_px(settings, 40.0, -25.0) == (40.0, -25.0)
+
+
+def test_whole_frame_search_is_at_pixel_precision() -> None:
+    settings = TemplateMatchingSettings(
+        areas=[OFF_CENTRE_AREA], matching_mode=SubpixelMode(upsampling_factor=4.0)
+    )
+
+    dx, dy = _whole_frame_drift_px(settings, 2.3, -1.6)
+
+    assert (dx, dy) == (2.0, -2.0)
+
+
+def test_whole_frame_search_is_logged() -> None:
+    log = MemoryTextLogger(lambda: 0)
+    settings = TemplateMatchingSettings(areas=[AREA])
+    matcher = _matcher(settings, [_scene(), _scene()], log)
+    matcher.create_templates()
+
+    matcher.calculate_drift(whole_frame=True)
+
+    infos = [r.message.lower() for r in log.records[0] if r.level == "info"]
+    assert any(
+        "whole frame" in m and "maximal drift" in m and "pixel" in m for m in infos
+    )
+
+
+@pytest.mark.parametrize(
+    ("outcome", "searches"),
+    [
+        (PositioningOutcome.BEAM_SHIFTED, [False]),
+        (PositioningOutcome.STAGE_MOVED, [False, True]),
+        (PositioningOutcome.STAGE_OFF_TARGET, [False, True]),
+    ],
+)
+def test_drift_correction_searches_the_whole_frame_after_a_stage_move(
+    workflow: Workflow,
+    add_action: Callable[..., Action],
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: PositioningOutcome,
+    searches: list[bool],
+) -> None:
+    add_action(
+        "drift_correction",
+        "dc",
+        drift_calculation_mode=TemplateMatchingDriftCorrection(
+            areas=[AREA], correction_margin=60.0
+        ),
+    )
+    for action in workflow.actions:
+        action.prepare()
+
+    searched: list[bool] = []
+    calculate_drift = TemplateMatching.calculate_drift
+
+    def recording(self: TemplateMatching, whole_frame: bool = False) -> Drift:
+        searched.append(whole_frame)
+        return calculate_drift(self, whole_frame)
+
+    monkeypatch.setattr(TemplateMatching, "calculate_drift", recording)
+    microscope = workflow.microscope
+    add_beam_shift = microscope.add_beam_shift_with_verification
+    # the first correction ends as `outcome`, later ones as usual
+    outcomes = [outcome]
+    monkeypatch.setattr(
+        microscope,
+        "add_beam_shift_with_verification",
+        lambda delta, beam=None: (
+            outcomes.pop() if outcomes else add_beam_shift(delta, beam)
+        ),
+    )
+
+    workflow.run(last_slice=1)
+
+    assert searched == searches

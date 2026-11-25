@@ -63,9 +63,13 @@ class DriftCalculationMode(ABC):
         pass
 
     @abstractmethod
-    def calculate_drift(self) -> Drift:
+    def calculate_drift(self, after_stage_move: bool = False) -> Drift:
         """
         Calculate the drift of the current image relative to a reference.
+
+        Args:
+            after_stage_move: True right after a stage move, when the image may
+                be shifted much further than by drift.
 
         Returns:
             A `Drift` instance containing the measured x and y shift in
@@ -185,8 +189,8 @@ class TemplateMatchingDrift(DriftCalculationMode):
     def is_set_up(self) -> bool:
         return self._template_matching.templates_exist()
 
-    def calculate_drift(self) -> Drift:
-        drift = self._template_matching.calculate_drift()
+    def calculate_drift(self, after_stage_move: bool = False) -> Drift:
+        drift = self._template_matching.calculate_drift(whole_frame=after_stage_move)
         self._last_confidence = drift.confidence
 
         return drift

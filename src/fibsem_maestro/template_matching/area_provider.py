@@ -81,6 +81,15 @@ class AreaProvider(ABC):
         """
 
     @abstractmethod
+    def acquire_full_frame(self) -> Image8Bit:
+        """
+        Acquire a full frame, after the full-frame dummy scans of the mode.
+
+        Returns:
+            The full frame as an 8-bit image.
+        """
+
+    @abstractmethod
     def acquire_template_regions(self) -> list[Image8Bit]:
         """
         Acquire exact template regions for template creation.
@@ -111,6 +120,13 @@ class FullFrameAreaProvider(AreaProvider):
         Returns:
             One cropped search region per configured area.
         """
+        frame = self.acquire_full_frame()
+        return [
+            frame.crop_with_padding(area, self._settings.correction_margin)
+            for area in self._settings.areas
+        ]
+
+    def acquire_full_frame(self) -> Image8Bit:
         # grab dummy frames
         assert isinstance(self._settings.frame_grabbing_mode, FullFrameMode)
         for i in range(self._settings.frame_grabbing_mode.dummy_scans):
@@ -120,12 +136,7 @@ class FullFrameAreaProvider(AreaProvider):
             self._microscope.beam.grab_frame()
 
         self._last_full_frame = self._microscope.beam.grab_frame().to_8bit()
-        return [
-            self._last_full_frame.crop_with_padding(
-                area, self._settings.correction_margin
-            )
-            for area in self._settings.areas
-        ]
+        return self._last_full_frame
 
     def acquire_template_regions(self) -> list[Image8Bit]:
         """
@@ -158,12 +169,7 @@ class ReducedAreaProvider(AreaProvider):
         mode = self._settings.frame_grabbing_mode
         beam = self._microscope.beam
 
-        # grab full image dummy frames
-        for i in range(mode.full_frame_dummy_scans):
-            self._txt_log.info(
-                f"Performing full frame dummy scan {i + 1}/{mode.full_frame_dummy_scans}."
-            )
-            beam.grab_frame()
+        self._full_frame_dummy_scans()
 
         # switching to a reduced area swaps in its own scan parameters
         # TODO: this should be done differently, it breaks architecture
@@ -201,6 +207,18 @@ class ReducedAreaProvider(AreaProvider):
             # as in the full-frame provider
             regions.append(region.padded_to(scanned, wanted))
         return regions
+
+    def acquire_full_frame(self) -> Image8Bit:
+        self._full_frame_dummy_scans()
+        return self._microscope.beam.grab_frame().to_8bit()
+
+    def _full_frame_dummy_scans(self) -> None:
+        """Grab the full-frame dummy scans of the mode."""
+        assert isinstance(self._settings.frame_grabbing_mode, ReducedAreaMode)
+        scans = self._settings.frame_grabbing_mode.full_frame_dummy_scans
+        for i in range(scans):
+            self._txt_log.info(f"Performing full frame dummy scan {i + 1}/{scans}.")
+            self._microscope.beam.grab_frame()
 
     def acquire_template_regions(self) -> list[Image8Bit]:
         beam = self._microscope.beam

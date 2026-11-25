@@ -9,4 +9,3 @@ control: autoscript
 ip_address: 192.168.0.1
 port: ""
 stage_tolerance: 100.0
-stage_trials: 3

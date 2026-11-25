@@ -11,6 +11,7 @@ from fibsem_maestro.core.beam_shift import BeamShift
 from fibsem_maestro.core.beam_type import BeamType
 from fibsem_maestro.core.stage_position import StagePosition
 from fibsem_maestro.microscope.error import MicroscopeError
+from fibsem_maestro.microscope.positioning_outcome import PositioningOutcome
 from fibsem_maestro.microscope.registry import MICROSCOPE_CONTROLS
 from fibsem_maestro.properties.global_properties import GlobalProperties
 from fibsem_maestro.properties.microscope_properties import MicroscopeProperties
@@ -113,75 +114,70 @@ class Microscope:
 
     def set_stage_position_with_verification(
         self, new_stage_position: StagePosition
-    ) -> None:
+    ) -> PositioningOutcome:
         """
-        Move the stage to an absolute position and verify the result.
+        Move the stage to an absolute position and check the position it reports.
 
-        Attempts to set the stage position up to `stage_trials` times. After
-        each attempt the Euclidean distance between the actual and target XY
-        position is checked against `stage_tolerance`. If the distance is
-        within tolerance the method returns immediately. If all attempts fail,
-        a warning is logged for each failed attempt but no exception is raised.
+        Only the XY position is checked, against `stage_tolerance`; a stage
+        off target is logged as a warning.
 
         Args:
             new_stage_position: The target stage position in nanometers and degrees.
+
+        Returns:
+            `STAGE_MOVED`, or `STAGE_OFF_TARGET` if the stage reports a position
+            off target.
         """
-        for attempt in range(1, self._settings.stage_trials + 1):
-            # set position
-            actual_position = self._control.try_set_stage_position(new_stage_position)
+        actual_position = self._control.try_set_stage_position(new_stage_position)
+        return self._check_stage_position(actual_position, new_stage_position)
 
-            # check whether the movement is within tolerance
-            dist = distance.euclidean(
-                actual_position.to_xy(), new_stage_position.to_xy()
-            )
-
-            if dist <= self._settings.stage_tolerance:
-                # success
-                return
-
-            self._txt_log.warning(
-                f"Stage off target (attempt {attempt}/{self._settings.stage_trials}): "
-                f"target={new_stage_position}, actual={actual_position}, dist={dist:.3f} > tol={self._settings.stage_tolerance}"
-            )
-
-        # intentionally NOT raising an Exception even if setting the stage fails
-
-    def move_stage_position_with_verification(self, delta: StagePosition) -> None:
+    def move_stage_position_with_verification(
+        self, delta: StagePosition
+    ) -> PositioningOutcome:
         """
-        Move the stage by a relative offset and verify the result.
+        Move the stage by a relative offset and check the position it reports.
 
-        The first attempt moves by `delta`; each further attempt moves by the
-        remaining XY error. Axes that `delta` leaves unchanged are therefore never
-        commanded. As in `set_stage_position_with_verification`, only the XY
-        position is verified, against `stage_tolerance`.
+        Axes that `delta` leaves unchanged are never commanded. Only the XY
+        position is checked, against `stage_tolerance`; a stage off target is
+        logged as a warning.
 
         Args:
             delta: The relative stage movement in nanometers and degrees.
+
+        Returns:
+            `STAGE_MOVED`, or `STAGE_OFF_TARGET` if the stage reports a position
+            off target.
         """
         target = self._control.stage_position + delta
-        step = delta
+        actual_position = self._control.try_move_stage_position(delta)
+        return self._check_stage_position(actual_position, target)
 
-        for attempt in range(1, self._settings.stage_trials + 1):
-            actual_position = self._control.try_move_stage_position(step)
+    def _check_stage_position(
+        self, actual: StagePosition, target: StagePosition
+    ) -> PositioningOutcome:
+        """
+        Compare the XY position the stage reports with the target.
 
-            dist = distance.euclidean(actual_position.to_xy(), target.to_xy())
-            if dist <= self._settings.stage_tolerance:
-                return
+        Args:
+            actual: The position the stage reports, in nanometers.
+            target: The position it was sent to, in nanometers.
 
-            self._txt_log.warning(
-                f"Stage off target (attempt {attempt}/{self._settings.stage_trials}): "
-                f"target={target}, actual={actual_position}, dist={dist:.3f} > tol={self._settings.stage_tolerance}"
-            )
-            # correct only the remaining XY error, which is all that is verified
-            step = StagePosition(
-                x=target.x - actual_position.x, y=target.y - actual_position.y
-            )
+        Returns:
+            `STAGE_MOVED` if they are within `stage_tolerance`, else `STAGE_OFF_TARGET`.
+        """
+        dist = distance.euclidean(actual.to_xy(), target.to_xy())
+        if dist <= self._settings.stage_tolerance:
+            return PositioningOutcome.STAGE_MOVED
 
-        # intentionally NOT raising an Exception even if setting the stage fails
+        self._txt_log.warning(
+            f"Stage off target: target={target}, actual={actual}, "
+            f"distance={dist:.3f} nm > tolerance={self._settings.stage_tolerance} nm."
+        )
+        return PositioningOutcome.STAGE_OFF_TARGET
 
     def set_beam_shift_with_verification(
         self, new_beam_shift: BeamShift, beam: BeamControl | None = None
-    ) -> bool:
+    ) -> PositioningOutcome:
         """
         Apply a beam shift and verify that it is within tolerance.
 
@@ -196,8 +192,8 @@ class Microscope:
             beam: The beam to shift. Defaults to the currently active beam.
 
         Returns:
-            `True` if the beam shift was applied within tolerance, `False`
-            if the fallback stage move was used instead.
+            `BEAM_SHIFTED` if the beam shift was applied within tolerance,
+            otherwise the outcome of the fallback stage move.
         """
         beam = beam or self.beam
         beam_type = beam.beam_type()
@@ -214,7 +210,7 @@ class Microscope:
             if dist > self._settings.beam_shift_tolerance:
                 raise MicroscopeError("Beam shift out of range.")
 
-            return True
+            return PositioningOutcome.BEAM_SHIFTED
         except Exception as e:
             self._txt_log.warning(f"Beam shift error: {e}. Adjusting stage position.")
 
@@ -229,17 +225,17 @@ class Microscope:
                 new_beam_shift.y * beam_shift_to_stage_move[1],
             ]
             # move stage
-            self.move_stage_position_with_verification(
+            outcome = self.move_stage_position_with_verification(
                 StagePosition(x=stage_move[0], y=stage_move[1])
             )
             # set beam shift to zero
             beam.beam_shift = BeamShift(0.0, 0.0)
 
-            return False
+            return outcome
 
     def add_beam_shift_with_verification(
         self, delta: BeamShift, beam: BeamControl | None = None
-    ) -> bool:
+    ) -> PositioningOutcome:
         """
         Add a beam shift delta to the current shift and verify the result.
 
@@ -250,8 +246,8 @@ class Microscope:
             beam: The beam to shift. Defaults to the currently active beam.
 
         Returns:
-            `True` if the resulting beam shift was applied within tolerance,
-            `False` if the fallback stage move was used instead.
+            `BEAM_SHIFTED` if the resulting beam shift was applied within
+            tolerance, otherwise the outcome of the fallback stage move.
         """
         beam = beam or self.beam
         return self.set_beam_shift_with_verification(beam.beam_shift + delta, beam)
@@ -514,9 +510,9 @@ class Microscope:
         # failure halfway through the fallback still restores the stage
         stage_may_have_moved = True
         try:
-            stage_may_have_moved = not self.add_beam_shift_with_verification(
+            stage_may_have_moved = self.add_beam_shift_with_verification(
                 offset, beam
-            )
+            ).stage_moved
 
             if stage_may_have_moved:
                 self._txt_log.info(
@@ -540,7 +536,7 @@ class Microscope:
 
             try:
                 self._txt_log.debug(f"Restoring beam shift to {base_shift}.")
-                if not self.set_beam_shift_with_verification(base_shift, beam):
+                if self.set_beam_shift_with_verification(base_shift, beam).stage_moved:
                     self._txt_log.warning(
                         f"Could not restore beam shift {base_shift}; the stage "
                         "was moved instead."

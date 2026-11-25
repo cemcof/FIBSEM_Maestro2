@@ -114,14 +114,14 @@ class DriftCorrection(Action[DriftCorrectionSettings, DriftCorrectionState]):
         self._drift_calc.before_calculate_drift(self._ctx.slice)
 
         beam_shift = self._calculate_correcting_beam_shift()
-        if not self._microscope.add_beam_shift_with_verification(beam_shift):
+        if self._microscope.add_beam_shift_with_verification(beam_shift).stage_moved:
             # the stage was moved instead; remove its positioning error
             self._ctx.text_logger.info(
-                "Fine-tuning drift correction to remove stage positioning error."
+                "The stage was moved instead of the beam; fine-tuning searches the whole frame for its positioning error."
             )
             # the beam shift was reset by the stage move, so this one is in range
             self._microscope.add_beam_shift_with_verification(
-                self._calculate_correcting_beam_shift()
+                self._calculate_correcting_beam_shift(after_stage_move=True)
             )
 
         if self._settings.grab_frame_after:
@@ -133,9 +133,14 @@ class DriftCorrection(Action[DriftCorrectionSettings, DriftCorrectionState]):
     def test(self) -> None:
         raise DriftCorrectionError(f"Testing is not implemented for {self.name}")
 
-    def _calculate_correcting_beam_shift(self) -> BeamShift:
+    def _calculate_correcting_beam_shift(
+        self, after_stage_move: bool = False
+    ) -> BeamShift:
         """
         Calculate the beam shift required to compensate for the measured drift.
+
+        Args:
+            after_stage_move: True right after a stage move.
 
         Returns:
             The beam shift to apply in order to compensate for the detected
@@ -146,7 +151,7 @@ class DriftCorrection(Action[DriftCorrectionSettings, DriftCorrectionState]):
             DriftCorrectionError: If drift calculation fails and
                 `settings.stop_at_failure` is `True`.
         """
-        drift = self._drift_calc.calculate_drift()
+        drift = self._drift_calc.calculate_drift(after_stage_move)
 
         if not drift.is_valid():
             if self._settings.stop_at_failure:

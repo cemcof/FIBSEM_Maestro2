@@ -2,9 +2,9 @@
 # Copyright (c) 2024-2026 CEMCOF
 
 
-from typing import Annotated
+from typing import Annotated, Any
 
-from pydantic import AfterValidator, Field
+from pydantic import AfterValidator, Field, model_validator
 
 from fibsem_maestro.microscope.registry import MICROSCOPE_CONTROLS
 from fibsem_maestro.settings.base_settings import BaseSettings
@@ -30,10 +30,6 @@ class MicroscopeSettings(BaseSettings):
     stage_tolerance: Annotated[float, FieldUnit(suffix="nm")] = Field(
         default=100, description="Maximal allowed stage error."
     )
-    stage_trials: int = Field(
-        default=3,
-        description="Number of trials to reach the goal position before raising an error.",
-    )
     beam_shift_to_stage_move_electron: tuple[float, float] = Field(
         default=(-1.0, -1.0),
         description="Per-axis factor for converting beam shift in the electron beam to stage move.",
@@ -42,3 +38,12 @@ class MicroscopeSettings(BaseSettings):
         default=(-1.0, -1.0),
         description="Per-axis factor for converting beam shift in the ion beam to stage move.",
     )
+
+    # TODO: remove later
+    @model_validator(mode="before")
+    @classmethod
+    def _without_stage_trials(cls, data: Any) -> Any:
+        # settings saved while stage moves were retried; they no longer are
+        if isinstance(data, dict) and "stage_trials" in data:
+            return {k: v for k, v in data.items() if k != "stage_trials"}
+        return data
