@@ -436,7 +436,8 @@ class StepMode(AutofunctionMode):
 
         With the imaging criterion, the sharpness the imaging calculated for
         that frame is used as is; otherwise the frame is scored with the
-        autofunction's own criterion.
+        autofunction's own criterion. If neither is available, the step is
+        skipped with a warning.
 
         Args:
             ctx: Shared execution environment.
@@ -446,10 +447,11 @@ class StepMode(AutofunctionMode):
         """
         if ctx.uses_imaging_criterion:
             if (sharpness := imaging.wait_for_sharpness()) is None:
-                raise AutofunctionError(
+                ctx.ctx.text_logger.warning(
                     f"Sharpness of the last frame of '{imaging.name}' is not "
-                    f"available for sweep step {step.index + 1}."
+                    f"available; skipping sweep step {step.index + 1}."
                 )
+                return
 
             ctx.ctx.text_logger.info(
                 f"Sharpness from {imaging.name} for sweep {step}: {sharpness}"
@@ -458,10 +460,11 @@ class StepMode(AutofunctionMode):
             return
 
         if (image := imaging.last_acquired_image) is None:
-            raise AutofunctionError(
-                f"Last acquired image of '{imaging.name}' is not available for "
-                f"sweep step {step.index + 1}."
+            ctx.ctx.text_logger.warning(
+                f"Last acquired image of '{imaging.name}' is not available; "
+                f"skipping sweep step {step.index + 1}."
             )
+            return
 
         jobs.submit(ctx.make_sharpness_job(image, step))
 

@@ -8,7 +8,11 @@ from pydantic import Field
 
 from fibsem_maestro.core.frequency import Every
 from fibsem_maestro.imaging.imaging import Imaging
-from fibsem_maestro.settings.autofunction_settings import BasicMode, LineMode
+from fibsem_maestro.settings.autofunction_settings import (
+    BasicMode,
+    LineMode,
+    MaxEdgeSweeps,
+)
 from fibsem_maestro.settings.base_settings import BaseSettings
 from fibsem_maestro.settings.form_utils import FormHint, WidgetType
 from fibsem_maestro.settings.property_names import PropertyNames
@@ -42,6 +46,17 @@ class RefocusSettings(BaseSettings):
     max_workers: Annotated[int, Field(gt=0)] = Field(
         default=1,
         description="Maximal number of threads used for the calculations in this action.",
+    )
+    max_edge_sweeps: MaxEdgeSweeps = Field(
+        default=3,
+        description=(
+            "Fail if the best value lies at the edge of the swept range in this many "
+            "sweeps in a row. If not checked, this is not tested."
+        ),
+    )
+    stop_at_failure: bool = Field(
+        default=True,
+        description="If checked, a failed refocus stops the execution. If not checked, a warning is printed.",
     )
 
     @property

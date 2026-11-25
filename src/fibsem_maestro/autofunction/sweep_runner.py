@@ -5,16 +5,15 @@
 Runs autofunction sweeps for the actions that sweep beam attributes.
 """
 
-import math
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import numpy as np
-
 from fibsem_maestro.autofunction import AUTOFUNCTION_MODES, LineMode
 from fibsem_maestro.autofunction.af_chart import af_chart
 from fibsem_maestro.autofunction.autofunction_context import AutofunctionContext
+from fibsem_maestro.autofunction.edge_streak import same_direction
+from fibsem_maestro.autofunction.error import AutofunctionNotConvergingError
 from fibsem_maestro.autofunction.jobs_manager import JobsManager
 from fibsem_maestro.autofunction.sweep_space import sweep_attributes
 from fibsem_maestro.autofunction.sweeping import Sweeping
@@ -32,6 +31,7 @@ if TYPE_CHECKING:
 
     from fibsem_maestro.action_context.action_context import ActionContext
     from fibsem_maestro.autofunction.autofunction_context import SweepSettingsLike
+    from fibsem_maestro.autofunction.edge_streak import EdgeStreak
     from fibsem_maestro.autofunction.result import AutofunctionResult
     from fibsem_maestro.autofunction.sweep_step import (
         SweepDirection,
@@ -43,11 +43,6 @@ if TYPE_CHECKING:
     from fibsem_maestro.microscope.microscope import Microscope
     from fibsem_maestro.settings.autofunction_settings import AutofunctionMode
     from fibsem_maestro.settings.dynamic_default import DefaultContext
-
-# another sweep follows only if the best value moved within this angle of the
-# previous move's direction (2D); in 1D the directions are +-1, so it only
-# matters whether the edge is the same
-_MAX_DIRECTION_CHANGE_DEG = 45.0
 
 
 @dataclass(frozen=True)
@@ -84,6 +79,8 @@ class SweepRunner:
         beam_type: The beam whose attributes are swept.
         defaults: What the settings following their dynamic defaults
             are computed from: the owning action's `default_context()`.
+        edge_streak: The owning action's streak of sweeps at the edge; it
+            spans runs, so the action keeps it in its state.
     """
 
     def __init__(
@@ -93,11 +90,13 @@ class SweepRunner:
         ctx: ActionContext,
         beam_type: BeamType,
         defaults: DefaultContext,
+        edge_streak: EdgeStreak,
     ) -> None:
         self._microscope = microscope
         self._settings = settings
         self._ctx = ctx
         self._defaults = defaults
+        self._edge_streak = edge_streak
 
         # the pool is sized from max_workers; reset_jobs resizes it between sweeps
         self._executor_workers = settings.max_workers
@@ -240,13 +239,18 @@ class SweepRunner:
 
         Waits for the sweep's sharpness jobs. If another sweep follows, its
         direction is remembered for the next decision. If the evaluation
-        fails, the run ends.
+        fails, the run ends and the failed sweep is kept until `abort_sweep`.
 
         Args:
             line_focus_name: Prefix of the line focus image's file name (line mode).
 
         Returns:
             The best value and whether another sweep follows.
+
+        Raises:
+            AutofunctionNotConvergingError: If the run ends with the edge
+                streak at `max_edge_sweeps` and `stop_at_failure` is set. The
+                best value stays applied.
         """
         try:
             results = self._jobs.wait_and_collect()
@@ -255,13 +259,15 @@ class SweepRunner:
         except Exception:
             self.end_run()
             raise
-        finally:
-            self._sweep_base_value = None
 
         self._sweeps_done += 1
+        self._edge_streak.record(direction)
         if not self._should_sweep_again(direction):
+            self._check_edge_streak()
+            self._sweep_base_value = None
             return SweepOutcome(best, sweep_again=False)
 
+        self._sweep_base_value = None
         self._last_direction = direction
         self._ctx.text_logger.info(
             "Best value lies at the edge of the swept region. Starting sweep "
@@ -282,6 +288,10 @@ class SweepRunner:
         Returns:
             The best value of the run's last sweep, now applied to the
             microscope; None in the Autoscript modes.
+
+        Raises:
+            Exception: Whatever made the run fail; the failed sweep is kept
+                until `abort_sweep`.
         """
         try:
             while True:
@@ -294,6 +304,11 @@ class SweepRunner:
                     return outcome.best
         finally:
             self.end_run()
+
+    def reset_to_sweep_base(self) -> None:
+        """Set the swept attributes back to the base value of the sweep in progress, if any."""
+        if self._sweeping is not None and self._sweep_base_value is not None:
+            self._sweeping.set_attribute_value(self._sweep_base_value)
 
     def abort_sweep(self) -> None:
         """Forget the sweep in progress and end the run."""
@@ -350,8 +365,8 @@ class SweepRunner:
         Another sweep follows while the best value keeps reaching the edge of
         the swept region in a consistent direction, i.e. while the optimum
         probably lies beyond it, and `max_sweeps` has not been reached. In 1D
-        that is the same edge again; in 2D a direction within
-        `_MAX_DIRECTION_CHANGE_DEG` of the last one.
+        that is the same edge again; in 2D a direction within 45 degrees of
+        the last one.
 
         Args:
             direction: Direction of the edge the finished sweep's best value
@@ -363,11 +378,32 @@ class SweepRunner:
         if direction is None or self._sweeps_done >= self._max_sweeps():
             return False
 
-        if self._last_direction is None:
-            return True
+        return self._last_direction is None or same_direction(
+            direction, self._last_direction
+        )
 
-        cosine = float(np.dot(direction, self._last_direction))
-        return cosine >= math.cos(math.radians(_MAX_DIRECTION_CHANGE_DEG)) - 1e-9
+    def _check_edge_streak(self) -> None:
+        """
+        Fail the ending run if the edge streak reached `max_edge_sweeps`.
+
+        Raises:
+            AutofunctionNotConvergingError: If it did and `stop_at_failure` is
+                set; otherwise a warning is logged.
+        """
+        limit = self._settings.max_edge_sweeps
+        count = self._edge_streak.count
+        if limit is None or count < limit:
+            return
+
+        message = (
+            f"The best value lay at the edge of the swept region in {count} "
+            "consecutive sweeps; the autofunction might not be converging"
+        )
+        if self._settings.stop_at_failure:
+            raise AutofunctionNotConvergingError(message)
+        self._ctx.text_logger.warning(
+            f"{message} Continuing, as stop at failure is not checked."
+        )
 
     def _max_sweeps(self) -> int:
         """

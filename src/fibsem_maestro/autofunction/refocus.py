@@ -15,12 +15,17 @@ best focus.
 from typing import TYPE_CHECKING
 
 from fibsem_maestro.action.action import Action
-from fibsem_maestro.action.outcome import Produced, StepOutcome
+from fibsem_maestro.action.outcome import CarriedOver, Produced, StepOutcome
 from fibsem_maestro.action.registry import ACTION_REGISTRY
 from fibsem_maestro.action.state import ActionState
 from fibsem_maestro.autofunction.autofunction import Autofunction
-from fibsem_maestro.autofunction.error import AutofunctionError
+from fibsem_maestro.autofunction.edge_streak import EdgeStreak
+from fibsem_maestro.autofunction.error import (
+    AutofunctionError,
+    AutofunctionNotConvergingError,
+)
 from fibsem_maestro.autofunction.sweep_runner import SweepRunner, swept_attributes
+from fibsem_maestro.autofunction.sweep_step import SweepDirection
 from fibsem_maestro.imaging.imaging import Imaging
 from fibsem_maestro.logging.logging import with_logging_context
 from fibsem_maestro.properties.global_properties import GlobalProperties
@@ -40,6 +45,9 @@ class RefocusState(ActionState):
     # a step-mode run was in progress when the refocus last checked, so the
     # first frame after the run still has to be refocused
     final_refocus_pending: bool = False
+    # consecutive sweeps, across runs, with the best value at the edge
+    edge_streak: int = 0
+    edge_streak_direction: SweepDirection | None = None
 
 
 @ACTION_REGISTRY.register("refocus")
@@ -82,6 +90,7 @@ class Refocus(Action[RefocusSettings, RefocusState]):
         # mode, sweeping and sharpness jobs; built for the imaging's beam at
         # the first refocus, since the imaging may come later in the workflow
         self._runner: SweepRunner | None = None
+        self._edge_streak = EdgeStreak()
 
         self._final_refocus_pending = False
 
@@ -95,10 +104,15 @@ class Refocus(Action[RefocusSettings, RefocusState]):
 
     @property
     def state(self) -> RefocusState:
-        return RefocusState(final_refocus_pending=self._final_refocus_pending)
+        return RefocusState(
+            final_refocus_pending=self._final_refocus_pending,
+            edge_streak=self._edge_streak.count,
+            edge_streak_direction=self._edge_streak.direction,
+        )
 
     def set_state(self, state: RefocusState) -> None:
         self._final_refocus_pending = state.final_refocus_pending
+        self._edge_streak.restore(state.edge_streak, state.edge_streak_direction)
 
     @property
     def beam_type(self) -> BeamType | None:
@@ -204,8 +218,15 @@ class Refocus(Action[RefocusSettings, RefocusState]):
         return False
 
     def _run_step(self) -> StepOutcome:
-        imaging = self._resolve_imaging()
-        best = self._refocus(imaging)
+        try:
+            imaging = self._resolve_imaging()
+            best = self._refocus(imaging)
+        except Exception as exc:
+            self._discard_failed_run(exc)
+            if self._settings.stop_at_failure:
+                raise
+            # the imaging keeps its own value
+            return CarriedOver(f"'{self.name}' failed: {exc}")
 
         # basic and line mode always sweep
         assert best is not None
@@ -233,7 +254,12 @@ class Refocus(Action[RefocusSettings, RefocusState]):
             )
 
         with self._scanning_area_applied():
-            self._refocus(imaging)
+            try:
+                self._refocus(imaging)
+            except Exception as exc:
+                self._discard_failed_run(exc)
+                if self._settings.stop_at_failure:
+                    raise
 
             # the updated value may not be displayed in the microscope GUI until we start scanning
             self._microscope.beam.grab_frame()
@@ -262,6 +288,28 @@ class Refocus(Action[RefocusSettings, RefocusState]):
         self._microscope.set_properties(imaging.read_properties(), beam=beam_type)
         return runner.run_to_completion(self.name_with_underscores)
 
+    def _discard_failed_run(self, exc: Exception) -> None:
+        """
+        Undo the trial values of a failed refocus and discard its run.
+
+        Logs a warning if the failure does not stop the execution.
+
+        Args:
+            exc: Why the refocus failed.
+        """
+        # undo the trial values set on the microscope; a run that did not
+        # converge keeps its best value
+        if self._runner is not None:
+            if not isinstance(exc, AutofunctionNotConvergingError):
+                self._runner.reset_to_sweep_base()
+            self._runner.abort_sweep()
+
+        if not self._settings.stop_at_failure:
+            self._ctx.text_logger.warning(
+                f"'{self.name}' failed: {exc}. Continuing without refocusing "
+                f"'{self._settings.linked_imaging}', as stop at failure is not checked."
+            )
+
     def _runner_for(self, beam_type: BeamType) -> SweepRunner:
         """
         Return the runner, built from the current settings for `beam_type`.
@@ -282,6 +330,7 @@ class Refocus(Action[RefocusSettings, RefocusState]):
                 self._ctx,
                 beam_type,
                 self.default_context(),
+                self._edge_streak,
             )
         else:
             self._runner.rebuild(beam_type)

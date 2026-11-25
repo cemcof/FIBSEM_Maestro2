@@ -8,11 +8,16 @@ from typing import TYPE_CHECKING
 import pytest
 
 from fibsem_maestro.autofunction.autofunction import Autofunction
+from fibsem_maestro.autofunction.error import (
+    AutofunctionError,
+    AutofunctionNotConvergingError,
+)
 from fibsem_maestro.autofunction.refocus import Refocus, RefocusState
 from fibsem_maestro.autofunction.sweeping_strategy import BasicSweepingStrategy
 from fibsem_maestro.core.beam_type import BeamType
 from fibsem_maestro.core.detail_band import DetailBand
 from fibsem_maestro.core.frequency import Every
+from fibsem_maestro.criterion.criterion import Criterion
 from fibsem_maestro.imaging.imaging import Imaging
 from fibsem_maestro.settings.autofunction_settings import BasicMode as BasicModeSettings
 from fibsem_maestro.settings.autofunction_settings import CustomCriterion
@@ -20,6 +25,7 @@ from fibsem_maestro.settings.autofunction_settings import StepMode as StepModeSe
 from fibsem_maestro.settings.criterion_settings import BandpassMetric, CriterionSettings
 from fibsem_maestro.settings.property_names import PropertyNames
 from fibsem_maestro.settings.sweeping_settings import CircularSweeping, LinearSweeping
+from fibsem_maestro.workflow.error import ActionError
 from fibsem_maestro.workflow.propagations import PropagationRule, Propagations
 from fibsem_maestro.workflow.workflow import Workflow
 
@@ -105,7 +111,13 @@ def add_stigmator_af(add_action: Callable[..., Action]) -> Callable[..., Autofun
 def add_refocus(add_action: Callable[..., Action]) -> Callable[..., Refocus]:
     """Add a working-distance refocus linked to `imaging`."""
 
-    def add(target: str = "working_distance", index: int | None = None) -> Refocus:
+    def add(
+        target: str = "working_distance",
+        index: int | None = None,
+        **settings: object,
+    ) -> Refocus:
+        # every sweep picks its largest candidate, at the edge
+        settings.setdefault("max_edge_sweeps", None)
         action = add_action(
             "refocus",
             "refocus",
@@ -117,6 +129,7 @@ def add_refocus(add_action: Callable[..., Action]) -> Callable[..., Refocus]:
                 ),
                 criterion=CRITERION,
             ),
+            **settings,
         )
         assert isinstance(action, Refocus)
         return action
@@ -301,3 +314,126 @@ def test_workflow_drops_propagation_rules_from_or_to_a_refocus(
     )
 
     assert loaded.propagations.rules == [PropagationRule("imaging", ["other"], wd)]
+
+
+@pytest.fixture
+def failing_sharpness(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make every sharpness calculation fail."""
+
+    def fail(*_: object) -> None:
+        raise RuntimeError("no sharpness")
+
+    monkeypatch.setattr(Criterion, "calculate_sharpness", fail)
+
+
+@pytest.mark.usefixtures("failing_sharpness")
+def test_failed_refocus_stops_the_execution(
+    workflow: Workflow,
+    add_imaging: Callable[..., Imaging],
+    add_stigmator_af: Callable[..., Autofunction],
+    add_refocus: Callable[..., Refocus],
+) -> None:
+    add_imaging()
+    add_stigmator_af()
+    add_refocus()
+
+    with pytest.raises(ActionError) as info:
+        workflow.run(last_slice=1)
+
+    assert info.value.action.name == "refocus"
+    assert isinstance(info.value.__cause__, AutofunctionError)
+
+
+@pytest.mark.usefixtures("failing_sharpness")
+def test_failed_refocus_without_stop_at_failure_leaves_the_imaging_alone(
+    workflow: Workflow,
+    add_imaging: Callable[..., Imaging],
+    add_stigmator_af: Callable[..., Autofunction],
+    add_refocus: Callable[..., Refocus],
+) -> None:
+    imaging = add_imaging()
+    stigmator = add_stigmator_af()
+    add_refocus(stop_at_failure=False)
+
+    _, refocused = _run(workflow, 1, imaging, stigmator)
+
+    assert refocused == [False]
+
+
+def test_refocus_edge_streak_stops_the_execution(
+    workflow: Workflow,
+    add_imaging: Callable[..., Imaging],
+    add_stigmator_af: Callable[..., Autofunction],
+    add_refocus: Callable[..., Refocus],
+) -> None:
+    imaging = add_imaging()
+    stigmator = add_stigmator_af()
+    add_refocus(max_edge_sweeps=2)
+    _run(workflow, 1, imaging, stigmator)
+
+    with pytest.raises(ActionError) as info:
+        _run(workflow, 1, imaging, stigmator)
+
+    assert info.value.action.name == "refocus"
+    assert isinstance(info.value.__cause__, AutofunctionNotConvergingError)
+
+
+def test_refocus_edge_streak_without_stop_at_failure_still_refocuses(
+    workflow: Workflow,
+    add_imaging: Callable[..., Imaging],
+    add_stigmator_af: Callable[..., Autofunction],
+    add_refocus: Callable[..., Refocus],
+) -> None:
+    imaging = add_imaging()
+    stigmator = add_stigmator_af()
+    add_refocus(max_edge_sweeps=2, stop_at_failure=False)
+
+    _, refocused = _run(workflow, 2, imaging, stigmator)
+
+    assert refocused == [True, True]
+
+
+def test_refocus_edge_streak_survives_saving_the_state(
+    workflow: Workflow,
+    add_imaging: Callable[..., Imaging],
+    add_stigmator_af: Callable[..., Autofunction],
+    add_refocus: Callable[..., Refocus],
+    tmp_path: Path,
+) -> None:
+    imaging = add_imaging()
+    stigmator = add_stigmator_af()
+    refocus = add_refocus(max_edge_sweeps=2)
+    _run(workflow, 1, imaging, stigmator)
+    file = tmp_path / "refocus_state.yaml"
+    refocus.state.to_file(file)
+
+    refocus.set_state(RefocusState())
+    _run(workflow, 1, imaging, stigmator)  # a streak of 1 again
+    refocus.set_state(RefocusState.from_file(file))
+
+    with pytest.raises(ActionError) as info:
+        _run(workflow, 1, imaging, stigmator)
+
+    assert isinstance(info.value.__cause__, AutofunctionNotConvergingError)
+
+
+@pytest.mark.usefixtures("failing_sharpness")
+@pytest.mark.parametrize("stop_at_failure", [True, False])
+def test_failed_refocus_test_restores_the_working_distance(
+    workflow: Workflow,
+    add_imaging: Callable[..., Imaging],
+    add_refocus: Callable[..., Refocus],
+    stop_at_failure: bool,
+) -> None:
+    imaging = add_imaging()
+    refocus = add_refocus(stop_at_failure=stop_at_failure)
+
+    if stop_at_failure:
+        with pytest.raises(AutofunctionError):
+            refocus.test()
+    else:
+        refocus.test()
+
+    assert workflow.microscope.electron_beam.working_distance == pytest.approx(
+        _next_frame_wd(imaging)
+    )

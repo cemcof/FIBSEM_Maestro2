@@ -39,7 +39,7 @@ class DriftCorrectionSettings(BaseSettings):
     )
     stop_at_failure: bool = Field(
         default=True,
-        description="If checked and drift correction fails, the execution is stopped. If not checked, warning is printed but execution continues.",
+        description="If checked, a failed drift correction stops the execution. If not checked, a warning is printed.",
     )
     execution_frequency: Frequency = Field(
         default_factory=Every,

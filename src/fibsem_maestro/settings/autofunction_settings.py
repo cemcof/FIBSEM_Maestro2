@@ -303,6 +303,10 @@ AutofunctionMode = Annotated[
 ]
 
 
+MaxEdgeSweeps = Annotated[int, Field(ge=2)] | None
+"""Consecutive sweeps with the best value at the edge that make a run fail."""
+
+
 class AutofunctionSettings(BaseSettings):
     linked_imaging: Annotated[
         str, FormHint(widget=WidgetType.ACTION_SELECTOR, action_type_filter=[Imaging])
@@ -329,6 +333,17 @@ class AutofunctionSettings(BaseSettings):
     sharpness_limit: Annotated[float, Field(gt=0)] | None = Field(
         default=None,
         description="Autofunction runs if the image is less sharp than this limit. If not checked, this condition is not applied.",
+    )
+    max_edge_sweeps: MaxEdgeSweeps = Field(
+        default=3,
+        description=(
+            "Fail if the best value lies at the edge of the swept range in this many "
+            "sweeps in a row. If not checked, this is not tested."
+        ),
+    )
+    stop_at_failure: bool = Field(
+        default=True,
+        description="If checked, a failed autofunction stops the execution. If not checked, a warning is printed.",
     )
     execution_frequency: Frequency = Field(
         default_factory=Every,

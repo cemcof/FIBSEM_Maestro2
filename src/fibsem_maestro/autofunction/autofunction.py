@@ -6,10 +6,14 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from fibsem_maestro.action.action import Action
-from fibsem_maestro.action.outcome import Produced, StepOutcome
+from fibsem_maestro.action.outcome import CarriedOver, Produced, StepOutcome
 from fibsem_maestro.action.registry import ACTION_REGISTRY
 from fibsem_maestro.action.state import ActionState
-from fibsem_maestro.autofunction.error import AutofunctionError
+from fibsem_maestro.autofunction.edge_streak import EdgeStreak
+from fibsem_maestro.autofunction.error import (
+    AutofunctionError,
+    AutofunctionNotConvergingError,
+)
 from fibsem_maestro.autofunction.result import AutofunctionResult
 from fibsem_maestro.autofunction.sweep_runner import SweepRunner
 from fibsem_maestro.autofunction.sweep_step import (
@@ -48,6 +52,9 @@ class AutofunctionState(ActionState):
     collected_results: list[AutofunctionResult] = field(default_factory=list)
     sweeps_done: int = 0
     last_direction: SweepDirection | None = None
+    # consecutive sweeps, across runs, with the best value at the edge
+    edge_streak: int = 0
+    edge_streak_direction: SweepDirection | None = None
     # slice on which a run was requested that is still waiting for the linked
     # imaging to be free; None if no request is waiting
     queued_since: int | None = None
@@ -121,9 +128,15 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
     ):
         super().__init__(name, microscope, settings, ctx, actions)
 
+        self._edge_streak = EdgeStreak()
         # mode, sweeping, sharpness jobs and the bookkeeping of a run
         self._runner = SweepRunner(
-            microscope, settings, ctx, settings.beam_type, self.default_context()
+            microscope,
+            settings,
+            ctx,
+            settings.beam_type,
+            self.default_context(),
+            self._edge_streak,
         )
 
         # the step-mode sweep in progress, advanced once per slice
@@ -173,6 +186,8 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
             else [],
             sweeps_done=self._runner.sweeps_done,
             last_direction=self._runner.last_direction,
+            edge_streak=self._edge_streak.count,
+            edge_streak_direction=self._edge_streak.direction,
             queued_since=self._queued_since,
             trial_value=self._trial_value,
             trial_frame_slice=self._trial_frame_slice,
@@ -228,6 +243,7 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
         self._queued_since = state.queued_since
         self._trial_value = state.trial_value
         self._trial_frame_slice = state.trial_frame_slice
+        self._edge_streak.restore(state.edge_streak, state.edge_streak_direction)
         self._runner.restore(
             state.sweep_base_value,
             state.sweeps_done,
@@ -366,7 +382,12 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
             else:
                 self._ctx.text_logger.info("No saved microscope properties found.")
 
-            self._runner.run_to_completion(self.name_with_underscores)
+            try:
+                self._runner.run_to_completion(self.name_with_underscores)
+            except Exception as exc:
+                self._discard_failed_run(exc)
+                if self._settings.stop_at_failure:
+                    raise
 
             # the updated value may not be displayed in the microscope GUI until we start scanning
             self._microscope.beam.grab_frame()
@@ -375,6 +396,22 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
         self._runner.wait()
 
     def _run_step(self) -> StepOutcome:
+        try:
+            return self._step()
+        except Exception as exc:
+            self._discard_failed_run(exc)
+            if self._settings.stop_at_failure:
+                raise
+            return CarriedOver(f"'{self.name}' failed: {exc}")
+
+    def _step(self) -> StepOutcome:
+        """
+        Advance the run by one slice.
+
+        Returns:
+            The trial value for the linked imaging (step mode), or the
+            collected properties once the run finished.
+        """
         if self._trial_frame_missing():
             # scoring the imaging's last frame would credit the pending trial
             # value with the sharpness of a frame taken at another value
@@ -516,26 +553,17 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
             self._runner.wait()
         except StopIteration:
             pass
-        except Exception:
-            self._abort_sweep()
-            raise
         else:
             return trial
 
-        try:
-            outcome = self._runner.finish_sweep(self.name_with_underscores)
-        finally:
-            # clear even if evaluation fails, so the next slice starts afresh
-            self._active_gen = None
-            self._trial_target = None
-            self._current_step_index = 0
+        # on failure, the sweep is kept for `_discard_failed_run` to undo
+        outcome = self._runner.finish_sweep(self.name_with_underscores)
+        self._active_gen = None
+        self._trial_target = None
+        self._current_step_index = 0
 
         if outcome.sweep_again:
-            try:
-                self._start_sweep()
-            except Exception:
-                self._runner.end_run()
-                raise
+            self._start_sweep()
             # basic and line mode complete the new sweep here; step mode
             # returns its first trial value
             return self._advance()
@@ -637,10 +665,35 @@ class Autofunction(Action[AutofunctionSettings, AutofunctionState]):
             f"next frame of '{target.imaging.name}'."
         )
 
+    def _discard_failed_run(self, exc: Exception) -> None:
+        """
+        Undo the trial values of a failed run and discard it.
+
+        Logs a warning if the failure does not stop the execution.
+
+        Args:
+            exc: Why the run failed.
+        """
+        # undo the trial values set on the microscope; a run that did not
+        # converge keeps its best value
+        if not isinstance(exc, AutofunctionNotConvergingError):
+            if self.has_stored_properties():
+                self.read_and_set_properties()
+            # the swept attributes may not be among the stored properties
+            self._runner.reset_to_sweep_base()
+        self._restore_imaging()
+        self._abort_sweep()
+
+        if not self._settings.stop_at_failure:
+            self._ctx.text_logger.warning(
+                f"'{self.name}' failed: {exc}. Continuing, as stop at failure "
+                "is not checked."
+            )
+
     def _abort_sweep(self) -> None:
-        """Close and discard the active sweep."""
-        assert self._active_gen is not None
-        self._active_gen.close()
+        """Close and discard the active sweep, if any, and end the run."""
+        if self._active_gen is not None:
+            self._active_gen.close()
         self._active_gen = None
         self._trial_target = None
         self._trial_value = None

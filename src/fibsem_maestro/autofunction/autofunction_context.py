@@ -49,6 +49,16 @@ class SweepSettingsLike(Protocol):
         """Most threads calculating sharpness at once."""
         ...
 
+    @property
+    def stop_at_failure(self) -> bool:
+        """Whether a failed run raises instead of logging a warning."""
+        ...
+
+    @property
+    def max_edge_sweeps(self) -> int | None:
+        """Consecutive sweeps at the edge that make a run fail; None to not check."""
+        ...
+
 
 class AutofunctionContext:
     def __init__(
