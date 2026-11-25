@@ -30,7 +30,9 @@ from gui_testkit.sample_settings import (
     SquareShape,
     filled_kitchen_sink,
 )
+from PyQt6.QtCore import QEvent, QObject
 from PyQt6.QtWidgets import (
+    QApplication,
     QComboBox,
     QDoubleSpinBox,
     QPushButton,
@@ -206,6 +208,38 @@ def test_union_offers_a_radio_button_per_variant_with_its_description(
         ("square shape", "A square shape."),
         ("point shape", "A single point."),
     ]
+
+
+class _WindowShowRecorder(QObject):
+    """Records every widget shown as a window of its own."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.windows: list[QWidget] = []
+
+    def eventFilter(self, a0: QObject | None, a1: QEvent | None) -> bool:
+        if (
+            a1 is not None
+            and a1.type() == QEvent.Type.Show
+            and isinstance(a0, QWidget)
+            and a0.isWindow()
+        ):
+            self.windows.append(a0)
+        return False
+
+
+def test_building_a_union_opens_no_window(live_form: Callable[..., Form]) -> None:
+    # each radio button used to flash up as a window while the form was built
+    app = QApplication.instance()
+    assert app is not None
+    recorder = _WindowShowRecorder()
+    app.installEventFilter(recorder)
+    try:
+        form = live_form(KitchenSink())
+    finally:
+        app.removeEventFilter(recorder)
+
+    assert [w for w in recorder.windows if w is not form.widget] == []
 
 
 def test_nested_union_follows_its_driving_field(

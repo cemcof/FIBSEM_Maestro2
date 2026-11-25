@@ -102,9 +102,8 @@ class DiscriminatedUnionWidget(QWidget, FieldEditor[Any]):
             btn = QRadioButton(
                 labels.get(disc_value) or class_name_to_label(variant_cls.__name__)
             )
-            # kept in the layout and the group even when hidden: a button held
-            # only by the QButtonGroup is collected and leaves a dangling id
-            btn.setVisible(show_selector)
+            if not show_selector:
+                btn.hide()
             if description := descriptions.get(disc_value):
                 btn.setToolTip(description)
             self._button_group.addButton(btn, i)
