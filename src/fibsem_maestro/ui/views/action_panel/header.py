@@ -226,6 +226,16 @@ class ActionHeader(QObject):
             button.setEnabled(data.tools_enabled.get(key, False))
         self._reset_button.setEnabled(data.reset_enabled)
 
+    def set_running(self, key: str | None) -> None:
+        """
+        Show which tool's microscope task is running.
+
+        Args:
+            key: The `ToolSpec.key` of the tool whose task runs; None if none runs.
+        """
+        for tool_key, button in self._buttons.items():
+            button.set_busy(tool_key == key)
+
     def button(self, key: str) -> IconButton:
         """
         The button of a tool.

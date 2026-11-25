@@ -7,9 +7,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PyQt6.QtWidgets import QStackedWidget, QWidget
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QApplication, QStackedWidget, QWidget
 
+from fibsem_maestro.ui.views.action_panel.building_page import BuildingPage
 from fibsem_maestro.ui.views.action_panel.panel import ActionPanel
+from fibsem_maestro.ui.widgets.busy import while_blocked
 
 if TYPE_CHECKING:
     from fibsem_maestro.action.action import Action
@@ -87,8 +90,10 @@ class ActionPanelHost(QStackedWidget):
 
     Panels are created the first time their action is shown and kept, so that
     collapsed groups, expanded area viewers and loaded images survive switching
-    between actions. A panel is discarded when its action is removed, and all
-    panels when the workflow is replaced.
+    between actions. Once creating a panel takes `BUSY_DELAY_MS`, a page names
+    its action and the cursor shows that the application is busy. A panel is
+    discarded when its action is removed, and all panels when the workflow is
+    replaced.
 
     Args:
         factory: Creates panels.
@@ -113,6 +118,9 @@ class ActionPanelHost(QStackedWidget):
         self.addWidget(self._empty_panel)
         self.setCurrentWidget(self._empty_panel)
 
+        self._building_page = BuildingPage()
+        self.addWidget(self._building_page)
+
         session.action_removed.connect(self._on_action_removed)
         session.workflow_replaced.connect(self._on_workflow_replaced)
 
@@ -129,10 +137,48 @@ class ActionPanelHost(QStackedWidget):
 
         panel = self._panels.get(action)
         if panel is None:
-            panel = self._factory.create(action)
+            panel = self._create_panel(action)
             self._panels[action] = panel
             self.addWidget(panel)
         self.setCurrentWidget(panel)
+
+    @property
+    def building_page(self) -> BuildingPage:
+        """The page shown while a panel is created."""
+        return self._building_page
+
+    def _create_panel(self, action: Action) -> ActionPanel:
+        """
+        Create the panel of an action, showing the building page if it takes long.
+
+        Args:
+            action: The action.
+
+        Returns:
+            The new panel, not yet added to the stack.
+        """
+        previous = self.currentWidget()
+        self._building_page.set_action_name(action.name)
+        try:
+            with while_blocked(self._show_building_frame, _restore_cursor):
+                return self._factory.create(action)
+        except Exception:
+            self.setCurrentWidget(previous)
+            raise
+
+    def _show_building_frame(self, first: bool) -> None:
+        """
+        Show the building page, the first time with the wait cursor, else with its arc moved on.
+
+        Args:
+            first: Whether this is the first frame.
+        """
+        if first:
+            self.setCurrentWidget(self._building_page)
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        else:
+            self._building_page.advance()
+        self._building_page.repaint()
 
     def panel(self, action: Action) -> ActionPanel | None:
         """
@@ -165,3 +211,8 @@ class ActionPanelHost(QStackedWidget):
         panel.dispose()
         self._validity.forget(action)
         panel.deleteLater()
+
+
+def _restore_cursor() -> None:
+    """Undo the wait cursor of the building page."""
+    QApplication.restoreOverrideCursor()

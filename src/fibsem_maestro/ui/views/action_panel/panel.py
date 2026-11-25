@@ -21,6 +21,7 @@ from fibsem_maestro.ui.views.action_panel.header import (
     action_header_view,
 )
 from fibsem_maestro.ui.views.action_panel.propagations import PropagationsEditor
+from fibsem_maestro.ui.widgets.busy import while_blocked
 from fibsem_maestro.ui.widgets.form_style import FORM_STYLESHEET
 
 if TYPE_CHECKING:
@@ -264,6 +265,8 @@ class ActionPanel(QWidget):
         self._form.set_read_only(not permissions.settings_editable)
         if self._propagations is not None:
             self._propagations.set_read_only(not permissions.rules_editable)
+        if not permissions.task_busy:
+            self._header.set_running(None)
         self._render_header()
 
     def _on_settings_committed(self, path: str) -> None:
@@ -275,15 +278,22 @@ class ActionPanel(QWidget):
 
     def _on_tool_clicked(self, key: str) -> None:
         tool = self._tools[key]
-        tool.invoke(
-            ToolContext(
-                action=self._action,
-                commands=self._commands,
-                session=self._session,
-                form_builder=self._form_builder,
-                form_context=self._form_contexts.for_properties(self._action),
-                parent=self,
-                refresh=self._render_header,
-                policy=self._policy,
+        button = self._header.button(key)
+        task_was_busy = self._policy.permissions.task_busy
+        # the tool may work on this thread for a while, e.g. building a dialog
+        with while_blocked(button.show_blocked_frame, button.end_blocked_frames):
+            tool.invoke(
+                ToolContext(
+                    action=self._action,
+                    commands=self._commands,
+                    session=self._session,
+                    form_builder=self._form_builder,
+                    form_context=self._form_contexts.for_properties(self._action),
+                    parent=self,
+                    refresh=self._render_header,
+                    policy=self._policy,
+                )
             )
-        )
+            # a task submitted by the tool makes the policy busy before invoke returns
+            if not task_was_busy and self._policy.permissions.task_busy:
+                self._header.set_running(key)
