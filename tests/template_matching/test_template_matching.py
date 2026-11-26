@@ -10,6 +10,7 @@ import pytest
 from scipy import ndimage
 
 from fibsem_maestro.core.area import RelativeArea
+from fibsem_maestro.core.drift import Drift
 from fibsem_maestro.core.image import Image8Bit
 from fibsem_maestro.core.point import RelativePoint
 from fibsem_maestro.logging.image.memory import MemoryImageLogger
@@ -28,12 +29,12 @@ from fibsem_maestro.store.image.memory import MemoryImageStore
 from fibsem_maestro.template_matching.area_provider import AreaProvider
 from fibsem_maestro.template_matching.error import TemplateMatchingError
 from fibsem_maestro.template_matching.template_matching import TemplateMatching
+from fibsem_maestro.workflow.error import ActionError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from fibsem_maestro.action.action import Action
-    from fibsem_maestro.core.drift import Drift
     from fibsem_maestro.workflow.workflow import Workflow
 
 PIXEL_SIZE_NM = 10.0
@@ -293,3 +294,104 @@ def test_drift_correction_searches_the_whole_frame_after_a_stage_move(
     workflow.run(last_slice=1)
 
     assert searched == searches
+
+
+# three areas apart from each other; the last one is spoiled in `_spoiled_scene`
+THREE_AREAS = [
+    RelativeArea(origin=RelativePoint(0.1, 0.1), width=0.2, height=0.2),
+    RelativeArea(origin=RelativePoint(0.6, 0.1), width=0.2, height=0.2),
+    RelativeArea(origin=RelativePoint(0.35, 0.6), width=0.2, height=0.2),
+]
+
+
+def _spoiled_scene() -> Image8Bit:
+    """The scene with the last of `THREE_AREAS` replaced by unrelated noise."""
+    scene = _scene()
+    area = THREE_AREAS[-1].to_pixels(scene.resolution)
+    rng = np.random.default_rng(1)
+    rows = slice(area.origin.y, area.origin.y + area.height)
+    cols = slice(area.origin.x, area.origin.x + area.width)
+    scene[rows, cols] = rng.integers(0, 256, scene[rows, cols].shape)
+    return scene
+
+
+@pytest.mark.parametrize(("required", "valid"), [(1, True), (2, True), (3, False)])
+def test_drift_needs_min_valid_areas_valid_matches(required: int, valid: bool) -> None:
+    # the spoiled area matches with a low confidence, so 2 of 3 matches are valid
+    settings = TemplateMatchingSettings(
+        areas=THREE_AREAS, min_confidence=0.8, min_valid_areas=required
+    )
+    matcher = _matcher(settings, [_scene(), _spoiled_scene()])
+    matcher.create_templates()
+
+    drift = matcher.calculate_drift()
+
+    assert drift.is_valid() is valid
+    if not valid:
+        assert drift.reason is not None
+        assert "2" in drift.reason and "3" in drift.reason
+
+
+def test_matches_beyond_the_maximal_drift_are_not_valid_areas() -> None:
+    # 8 px is 80 nm, beyond a 50 nm maximal drift, in every area
+    settings = TemplateMatchingSettings(
+        areas=THREE_AREAS, correction_margin=200.0, maximal_drift=50.0
+    )
+    matcher = _matcher(settings, [_scene(), _scene(8.0, 0.0)])
+    matcher.create_templates()
+
+    assert not matcher.calculate_drift().is_valid()
+
+
+def _drift_correction(
+    add_action: Callable[..., Action], areas: list[RelativeArea], required: int
+) -> Action:
+    return add_action(
+        "drift_correction",
+        "dc",
+        drift_calculation_mode=TemplateMatchingDriftCorrection(
+            areas=areas, min_valid_areas=required
+        ),
+    )
+
+
+def test_requiring_more_valid_areas_than_defined_is_a_preparation_issue(
+    add_action: Callable[..., Action],
+) -> None:
+    enough = _drift_correction(add_action, THREE_AREAS[:2], 2)
+    too_many = _drift_correction(add_action, THREE_AREAS[:2], 3)
+
+    issues = set(too_many.preparation_issues()) - set(enough.preparation_issues())
+
+    assert len(issues) == 1
+    (issue,) = issues
+    assert "3" in issue and "2" in issue
+
+
+@pytest.mark.parametrize("stop_at_failure", [True, False])
+def test_failed_drift_correction_tells_why(
+    workflow: Workflow,
+    add_action: Callable[..., Action],
+    monkeypatch: pytest.MonkeyPatch,
+    stop_at_failure: bool,
+) -> None:
+    action = _drift_correction(add_action, [AREA], 1)
+    action.settings.stop_at_failure = stop_at_failure
+    for each in workflow.actions:
+        each.prepare()
+    reason = "1 of 3 areas gave a valid match; at least 2 required"
+    monkeypatch.setattr(
+        TemplateMatching,
+        "calculate_drift",
+        lambda *_, **__: Drift(None, None, reason=reason),
+    )
+    logged: list[str] = []
+    monkeypatch.setattr(action.ctx.text_logger, "warning", logged.append)
+
+    if stop_at_failure:
+        with pytest.raises(ActionError) as error:
+            workflow.run(last_slice=1)
+        assert reason in str(error.value)
+    else:
+        workflow.run(last_slice=1)
+        assert any(reason in message for message in logged)

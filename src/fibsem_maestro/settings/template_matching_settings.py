@@ -102,6 +102,10 @@ class TemplateMatchingSettings(BaseSettings):
         default=None,
         description="Minimal cross-correlation value required for a template match to be accepted as a valid drift measurement.",
     )
+    min_valid_areas: Annotated[int, Field(ge=1)] = Field(
+        default=1,
+        description="Drift is accepted only if at least this many areas give a valid match.",
+    )
     maximal_drift: Annotated[float | None, FieldUnit(suffix="nm"), Field(gt=0.0)] = (
         Field(
             default=None,

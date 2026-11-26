@@ -18,11 +18,14 @@ class Drift:
         y: Drift along the y-axis in nanometers. None if undetermined.
         confidence: Confidence of the drift estimate in the range [0, 1].
             None if the estimator does not provide a confidence value.
+        reason: Why the drift is undetermined; None if it is determined or
+            the estimator gives no reason.
     """
 
     x: Annotated[float | None, FieldUnit(suffix="nm")]
     y: Annotated[float | None, FieldUnit(suffix="nm")]
     confidence: float | None = None
+    reason: str | None = None
 
     def is_valid(self) -> bool:
         """

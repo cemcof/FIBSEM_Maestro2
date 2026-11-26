@@ -85,9 +85,10 @@ class DriftCorrection(Action[DriftCorrectionSettings, DriftCorrectionState]):
         self._drift_calc.setup()
 
     def preparation_issues(self) -> list[str]:
-        if self._drift_calc.is_set_up():
-            return []
-        return ["drift calculation is not set up; press the Prepare button"]
+        issues = self._drift_calc.settings_issues()
+        if not self._drift_calc.is_set_up():
+            issues.append("drift calculation is not set up; press the Prepare button")
+        return issues
 
     def initialize_first_slice(self) -> None:
         # copy before the base advances the context, while the store still
@@ -154,14 +155,13 @@ class DriftCorrection(Action[DriftCorrectionSettings, DriftCorrectionState]):
         drift = self._drift_calc.calculate_drift(after_stage_move)
 
         if not drift.is_valid():
+            message = "Drift correction failed: could not calculate drift"
+            if drift.reason:
+                message += f" ({drift.reason})"
             if self._settings.stop_at_failure:
-                raise DriftCorrectionError(
-                    "Drift correction failed: could not calculate drift."
-                )
+                raise DriftCorrectionError(f"{message}.")
 
-            self._ctx.text_logger.warning(
-                "Drift correction failed: could not calculate drift. Not performing correction."
-            )
+            self._ctx.text_logger.warning(f"{message}. Not performing correction.")
 
         # convert drift to beam shift
         return self._drift_to_beam_shift(drift)

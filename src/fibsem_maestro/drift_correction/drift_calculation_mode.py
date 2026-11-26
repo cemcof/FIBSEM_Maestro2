@@ -97,6 +97,17 @@ class DriftCalculationMode(ABC):
         """
         return True
 
+    def settings_issues(self) -> list[str]:
+        """
+        Report settings that make every drift calculation fail.
+
+        Must be cheap: no microscope access and no image I/O.
+
+        Returns:
+            Human-readable problems; empty by default.
+        """
+        return []
+
     def before_calculate_drift(self, slice_number: int) -> None:
         """
         Perform per-slice preparation before drift calculation.
@@ -171,6 +182,7 @@ class TemplateMatchingDrift(DriftCalculationMode):
         txt_log: TextLogger,
         img_log: ImageLogger,
     ):
+        self._settings = settings
         self._template_matching = TemplateMatching(
             AREA_PROVIDERS.get(settings.frame_grabbing_mode.type)(
                 microscope, settings, txt_log
@@ -188,6 +200,16 @@ class TemplateMatchingDrift(DriftCalculationMode):
 
     def is_set_up(self) -> bool:
         return self._template_matching.templates_exist()
+
+    def settings_issues(self) -> list[str]:
+        required = self._settings.min_valid_areas
+        defined = len(self._settings.areas)
+        if required <= defined:
+            return []
+        verb = "is" if defined == 1 else "are"
+        return [
+            f"drift requires {required} valid areas, but only {defined} {verb} defined"
+        ]
 
     def calculate_drift(self, after_stage_move: bool = False) -> Drift:
         drift = self._template_matching.calculate_drift(whole_frame=after_stage_move)

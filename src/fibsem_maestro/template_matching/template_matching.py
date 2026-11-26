@@ -235,8 +235,8 @@ class TemplateMatching:
         # average confidence of the individual template matches
         confidence = self._get_average_confidence(matches)
 
-        if shift is None:
-            return Drift(x=None, y=None, confidence=confidence)
+        if isinstance(shift, str):
+            return Drift(x=None, y=None, confidence=confidence, reason=shift)
 
         return Drift(x=shift[0], y=shift[1], confidence=confidence)
 
@@ -510,13 +510,13 @@ class TemplateMatching:
         matches: list[TemplateMatchResult[ShiftPrecision]],
         pixel_size: float,
         max_drift: float | None,
-    ) -> tuple[float, float] | None:
+    ) -> tuple[float, float] | str:
         """
         Convert template match results to a mean image shift in nanometers.
 
         Converts each match's pixel displacement to nanometers and averages
-        the results across all matches that meet the confidence threshold.
-        Matches below the threshold are logged as warnings and excluded.
+        the results across all valid matches. Matches below the confidence
+        threshold or above `max_drift` are logged as warnings and excluded.
 
         Args:
             matches: Template match results, one per configured area.
@@ -526,7 +526,7 @@ class TemplateMatching:
 
         Returns:
             A `(dx_nm, dy_nm)` tuple representing the mean image shift, or
-            `None` if no match meets the confidence threshold.
+            why there is none if fewer than `min_valid_areas` matches are valid.
         """
         shifts_x = []
         shifts_y = []
@@ -561,12 +561,14 @@ class TemplateMatching:
             shifts_x.append(dx_nm)
             shifts_y.append(dy_nm)
 
-        # check that at least one template had a high enough confidence
-        if len(shifts_x) == 0 or len(shifts_y) == 0:
-            self._txt_log.warning(
-                "Template matching failed: all calculated matches were unsuitable."
+        required = self._settings.min_valid_areas
+        if len(shifts_x) < required:
+            reason = (
+                f"{len(shifts_x)} of {len(matches)} areas gave a valid match; "
+                f"at least {required} required"
             )
-            return None
+            self._txt_log.warning(f"Template matching failed: {reason}.")
+            return reason
 
         # calculate average image shift
         return float(np.mean(shifts_x)), float(np.mean(shifts_y))
