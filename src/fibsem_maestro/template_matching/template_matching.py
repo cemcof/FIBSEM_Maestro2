@@ -23,6 +23,7 @@ from fibsem_maestro.template_matching.result import (
     ShiftPrecision,
     TemplateMatchResult,
 )
+from fibsem_maestro.template_matching.state import TemplateMatchingState
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -77,7 +78,9 @@ class TemplateMatching:
         self._txt_log = txt_log
         self._img_log = img_log
 
-    def create_templates(self, store: ImageStore[Image8Bit] | None = None) -> None:
+    def create_templates(
+        self, store: ImageStore[Image8Bit] | None = None
+    ) -> TemplateMatchingState:
         """
         Acquire reference images and save an averaged template for each area.
 
@@ -90,6 +93,10 @@ class TemplateMatching:
 
         Args:
             store: Store to write templates to. If `None`, the current slice's store is used.
+
+        Returns:
+            What the templates were acquired for; pass it to `templates_exist`
+            and `outdated_reason`.
 
         Raises:
             TemplateMatchingError: If no template areas are configured, if the
@@ -120,38 +127,88 @@ class TemplateMatching:
             self._validate_template_scan_consistency(template_scans, area_index)
             self._save_averaged_template(template_scans, area_index, store)
 
-    def templates_exist(self, store: ImageStore[Image8Bit] | None = None) -> bool:
+        return self._current_state()
+
+    def templates_exist(
+        self,
+        state: TemplateMatchingState | None,
+        store: ImageStore[Image8Bit] | None = None,
+    ) -> bool:
         """
-        Check whether a template is stored for every configured area.
+        Check whether a template is stored for every area of a state.
 
         Args:
+            state: What the templates were acquired for, from `create_templates`.
             store: Store to check. If `None`, the current slice's store is used.
 
         Returns:
-            `True` if areas are configured and each has a stored template.
+            `True` if the state has areas and each has a stored template.
         """
+        if state is None:
+            return False
         if store is None:
             store = self._image_store
 
-        return bool(self._settings.areas) and all(
+        return bool(state.areas) and all(
             store.exists(self._construct_template_name(i))
-            for i in range(len(self._settings.areas))
+            for i in range(len(state.areas))
         )
+
+    def outdated_reason(
+        self,
+        state: TemplateMatchingState | None,
+        store: ImageStore[Image8Bit] | None = None,
+    ) -> str | None:
+        """
+        Tell why the stored templates do not fit the current areas and frame geometry.
+
+        Args:
+            state: What the templates were acquired for; None if unknown.
+            store: Store to check. If `None`, the current slice's store is used.
+
+        Returns:
+            E.g. "the template areas changed"; None if the templates fit.
+        """
+        if state is None:
+            return "no templates are recorded"
+        if not self.templates_exist(state, store):
+            return "the templates are missing"
+        if differences := state.differences(self._current_state()):
+            return f"the template {' and '.join(differences)} changed"
+        return None
+
+    def delete_templates(self, store: ImageStore[Image8Bit] | None = None) -> None:
+        """
+        Delete every stored template.
+
+        Args:
+            store: Store to delete from. If `None`, the current slice's store is used.
+
+        Raises:
+            OSError: If a template could not be deleted.
+        """
+        self._delete_templates(store if store is not None else self._image_store)
 
     def copy_templates(
         self, src: ImageStore[Image8Bit], dest: ImageStore[Image8Bit]
     ) -> None:
         """
-        Copy the template of every configured area unchanged between stores.
+        Replace the templates in one store with unchanged copies of those in another.
 
         Args:
             src: Store to read the templates from.
             dest: Store to write the templates to.
         """
-        for i in range(len(self._settings.areas)):
-            self._copy_template(i, src, dest)
+        self._delete_templates(dest)
+        # every stored template, whatever the areas configured now (see `_delete_templates`)
+        index = 0
+        while src.exists(self._construct_template_name(index)):
+            self._copy_template(index, src, dest)
+            index += 1
 
-    def update_templates(self, slice_number: int, confidence: float | None) -> None:
+    def update_templates(
+        self, slice_number: int, confidence: float | None
+    ) -> TemplateMatchingState | None:
         """
         Refresh templates for the next slice, subject to the update policy.
 
@@ -164,14 +221,17 @@ class TemplateMatching:
             slice_number: The current slice index.
             confidence: Average template matching confidence from
                 the most recent drift calculation. `None` if no confidence is available.
+
+        Returns:
+            What new templates were acquired for; None if the templates were copied.
         """
         if self._should_update_templates(slice_number, confidence):
             # acquire new templates for the next slice
-            self.create_templates(self._image_store.next)
+            return self.create_templates(self._image_store.next)
 
-        else:
-            # copy templates from the current slice
-            self.copy_templates(self._image_store, self._image_store.next)
+        # copy templates from the current slice
+        self.copy_templates(self._image_store, self._image_store.next)
+        return None
 
     def calculate_drift(self, whole_frame: bool = False) -> Drift:
         """
@@ -728,6 +788,15 @@ class TemplateMatching:
         )
         image = src.read(self._construct_template_name(index))
         dest.write(self._construct_template_name(index), image)
+
+    def _current_state(self) -> TemplateMatchingState:
+        """What templates acquired now would be acquired for."""
+        field_width, resolution = self._area_provider.frame_geometry()
+        return TemplateMatchingState(
+            areas=list(self._settings.areas),
+            horizontal_field_width=field_width,
+            resolution=resolution,
+        )
 
     def _construct_template_name(self, index: int) -> str:
         """

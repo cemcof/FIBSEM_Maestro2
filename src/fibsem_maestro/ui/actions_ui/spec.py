@@ -167,10 +167,13 @@ class ActionUiSpec:
         tools: The header's tool buttons, in order; Prepare, Edit, Apply and
             Test by default.
         sections: Extra panel sections.
+        reset_note: What else Reset state discards, added to its confirmation;
+            None for nothing.
     """
 
     tools: tuple[ToolSpec, ...] = field(default_factory=_default_tools)
     sections: tuple[SectionSpec, ...] = ()
+    reset_note: str | None = None
 
 
 ACTION_UI = Registry[ActionUiSpec]("action UI")

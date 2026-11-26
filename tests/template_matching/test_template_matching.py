@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -13,6 +15,9 @@ from fibsem_maestro.core.area import RelativeArea
 from fibsem_maestro.core.drift import Drift
 from fibsem_maestro.core.image import Image8Bit
 from fibsem_maestro.core.point import RelativePoint
+from fibsem_maestro.core.resolution import Resolution
+from fibsem_maestro.drift_correction.drift_calculation_mode import TemplateMatchingDrift
+from fibsem_maestro.drift_correction.drift_correction import DriftCorrectionState
 from fibsem_maestro.logging.image.memory import MemoryImageLogger
 from fibsem_maestro.logging.text.memory import MemoryTextLogger
 from fibsem_maestro.microscope.positioning_outcome import PositioningOutcome
@@ -28,12 +33,11 @@ from fibsem_maestro.settings.template_matching_settings import (
 from fibsem_maestro.store.image.memory import MemoryImageStore
 from fibsem_maestro.template_matching.area_provider import AreaProvider
 from fibsem_maestro.template_matching.error import TemplateMatchingError
+from fibsem_maestro.template_matching.state import FIELD_WIDTH_TOLERANCE
 from fibsem_maestro.template_matching.template_matching import TemplateMatching
 from fibsem_maestro.workflow.error import ActionError
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from fibsem_maestro.action.action import Action
     from fibsem_maestro.workflow.workflow import Workflow
 
@@ -56,8 +60,17 @@ def _scene(dx: float = 0.0, dy: float = 0.0) -> Image8Bit:
     return Image8Bit(np.clip(shifted, 0, 255).astype(np.uint8), PIXEL_SIZE_NM)
 
 
+FIELD_WIDTH_NM = 6000.0
+RESOLUTION = Resolution(600, 600)
+
+
 class ScriptedAreaProvider(AreaProvider):
-    """Serves pre-made frames in order, cropped as the full-frame provider does."""
+    """
+    Serves pre-made frames in order, cropped as the full-frame provider does.
+
+    Attributes:
+        geometry: The field width (nm) and resolution `frame_geometry` reports.
+    """
 
     def __init__(
         self,
@@ -67,6 +80,10 @@ class ScriptedAreaProvider(AreaProvider):
     ) -> None:
         super().__init__(None, settings, txt_log)  # ty: ignore[invalid-argument-type]
         self._frames = list(frames)
+        self.geometry = (FIELD_WIDTH_NM, RESOLUTION)
+
+    def frame_geometry(self) -> tuple[float, Resolution]:
+        return self.geometry
 
     @property
     def last_full_frame(self) -> None:
@@ -91,12 +108,15 @@ def _matcher(
     settings: TemplateMatchingSettings,
     frames: list[Image8Bit],
     log: MemoryTextLogger | None = None,
+    *,
+    provider: ScriptedAreaProvider | None = None,
+    image_store: MemoryImageStore[Image8Bit] | None = None,
 ) -> TemplateMatching:
     log = log or MemoryTextLogger(lambda: 0)
     return TemplateMatching(
-        ScriptedAreaProvider(settings, log, frames),
+        provider or ScriptedAreaProvider(settings, log, frames),
         settings,
-        MemoryImageStore(lambda: 0, Image8Bit),
+        image_store or MemoryImageStore(lambda: 0, Image8Bit),
         log,
         MemoryImageLogger(lambda: 0),
     )
@@ -180,8 +200,8 @@ def test_identical_template_scans_are_accepted() -> None:
         areas=[AREA], template_scans=2, maximal_drift=1.0
     )
     matcher = _matcher(settings, [_scene(), _scene()])
-    matcher.create_templates()
-    assert matcher.templates_exist()
+    state = matcher.create_templates()
+    assert matcher.templates_exist(state)
 
 
 def test_template_scan_drift_limit_is_in_nanometers() -> None:
@@ -395,3 +415,382 @@ def test_failed_drift_correction_tells_why(
     else:
         workflow.run(last_slice=1)
         assert any(reason in message for message in logged)
+
+
+TWO_AREAS = THREE_AREAS[:2]
+MOVED_AREA = RelativeArea(origin=RelativePoint(0.15, 0.1), width=0.2, height=0.2)
+
+Change = Callable[[TemplateMatchingSettings, "ScriptedAreaProvider"], None]
+
+
+def _move_first_area(settings: TemplateMatchingSettings, *_: object) -> None:
+    settings.areas = [MOVED_AREA, *TWO_AREAS[1:]]
+
+
+def _add_area(settings: TemplateMatchingSettings, *_: object) -> None:
+    settings.areas = list(THREE_AREAS)
+
+
+def _remove_area(settings: TemplateMatchingSettings, *_: object) -> None:
+    settings.areas = TWO_AREAS[:1]
+
+
+def _widen_field(_: object, provider: ScriptedAreaProvider) -> None:
+    provider.geometry = (2 * FIELD_WIDTH_NM, RESOLUTION)
+
+
+def _halve_resolution(_: object, provider: ScriptedAreaProvider) -> None:
+    provider.geometry = (FIELD_WIDTH_NM, Resolution(300, 300))
+
+
+CHANGES = pytest.mark.parametrize(
+    "change",
+    [_move_first_area, _add_area, _remove_area, _widen_field, _halve_resolution],
+    ids=["area moved", "area added", "area removed", "field width", "resolution"],
+)
+
+
+def _two_area_matcher(
+    image_store: MemoryImageStore[Image8Bit] | None = None,
+) -> tuple[TemplateMatching, TemplateMatchingSettings, ScriptedAreaProvider]:
+    """A matcher for `TWO_AREAS`, with its settings and area provider."""
+    settings = TemplateMatchingSettings(areas=list(TWO_AREAS))
+    log = MemoryTextLogger(lambda: 0)
+    provider = ScriptedAreaProvider(settings, log, [_scene()] * 8)
+    matcher = _matcher(settings, [], log, provider=provider, image_store=image_store)
+    return matcher, settings, provider
+
+
+def test_created_templates_fit_until_something_changes() -> None:
+    matcher, _, provider = _two_area_matcher()
+    state = matcher.create_templates()
+    assert matcher.outdated_reason(state) is None
+
+    # a change within the tolerance
+    provider.geometry = (FIELD_WIDTH_NM * (1 + FIELD_WIDTH_TOLERANCE / 2), RESOLUTION)
+    assert matcher.outdated_reason(state) is None
+
+
+@CHANGES
+def test_templates_no_longer_fit_after_a_change(change: Change) -> None:
+    matcher, settings, provider = _two_area_matcher()
+    state = matcher.create_templates()
+
+    change(settings, provider)
+
+    assert matcher.outdated_reason(state) is not None
+
+
+def test_templates_without_a_state_do_not_fit() -> None:
+    matcher, _, _ = _two_area_matcher()
+    matcher.create_templates()
+
+    assert not matcher.templates_exist(None)
+    assert matcher.outdated_reason(None) is not None
+
+
+def test_deleted_templates_do_not_fit() -> None:
+    matcher, _, _ = _two_area_matcher()
+    state = matcher.create_templates()
+
+    matcher.delete_templates()
+
+    assert not matcher.templates_exist(state)
+    assert matcher.outdated_reason(state) is not None
+
+
+@CHANGES
+def test_copying_copies_the_stored_templates_whatever_the_areas(change: Change) -> None:
+    image_store = MemoryImageStore(lambda: 0, Image8Bit)
+    matcher, settings, provider = _two_area_matcher(image_store)
+    state = matcher.create_templates()
+    change(settings, provider)
+
+    matcher.copy_templates(image_store, image_store.next)
+
+    assert matcher.templates_exist(state, image_store.next)
+    # only the stored ones: nothing beyond them for `_delete_templates` to find
+    assert not image_store.next.exists(f"template_{len(TWO_AREAS)}.tif")
+
+
+def test_copying_replaces_the_templates_already_there() -> None:
+    image_store = MemoryImageStore(lambda: 0, Image8Bit)
+    matcher, settings, _ = _two_area_matcher(image_store)
+    settings.areas = list(THREE_AREAS)
+    matcher.create_templates(image_store.next)
+    settings.areas = list(TWO_AREAS)
+    matcher.create_templates()
+
+    matcher.copy_templates(image_store, image_store.next)
+
+    assert not image_store.next.exists(f"template_{len(TWO_AREAS)}.tif")
+
+
+def test_template_update_tells_what_new_templates_are_for() -> None:
+    matcher, settings, provider = _two_area_matcher()
+    matcher.create_templates()
+    _move_first_area(settings, provider)
+    settings.update_confidence_limit = 0.5
+
+    # a confidence below the limit forces new templates
+    acquired = matcher.update_templates(1, confidence=0.1)
+    copied = matcher.update_templates(1, confidence=None)
+
+    assert acquired is not None
+    assert acquired.areas == settings.areas
+    assert copied is None
+
+
+def _template_drift_correction(add_action: Callable[..., Action]) -> Action:
+    return add_action(
+        "drift_correction",
+        "dc",
+        drift_calculation_mode=TemplateMatchingDriftCorrection(
+            areas=list(TWO_AREAS), correction_margin=60.0
+        ),
+    )
+
+
+def _mode(action: Action) -> TemplateMatchingDriftCorrection:
+    return action.settings.drift_calculation_mode
+
+
+def _keep(action: Action) -> None:
+    _ = action
+
+
+def _reset(action: Action) -> None:
+    action.reset_state()
+
+
+def _forget_the_state(action: Action) -> None:
+    # e.g. a workflow whose templates were acquired before the state recorded them
+    action.set_state(DriftCorrectionState())
+
+
+def _move_area_of(action: Action) -> None:
+    _mode(action).areas = [MOVED_AREA, *TWO_AREAS[1:]]
+
+
+def _add_area_to(action: Action) -> None:
+    _mode(action).areas = list(THREE_AREAS)
+
+
+def _remove_area_of(action: Action) -> None:
+    _mode(action).areas = TWO_AREAS[:1]
+
+
+def _change_the_margin(action: Action) -> None:
+    _mode(action).correction_margin = 70.0
+
+
+def _replace_the_mode_settings(action: Action) -> None:
+    action.settings.drift_calculation_mode = TemplateMatchingDriftCorrection(
+        areas=list(TWO_AREAS), correction_margin=60.0
+    )
+
+
+def _change_the_field_width(action: Action) -> None:
+    # the drift correction keeps the field width it finds on the microscope
+    action.microscope.electron_beam.horizontal_field_width *= 2
+
+
+@dataclass
+class _Run:
+    """What the drift correction did per slice: the slices it ran, measured, ..."""
+
+    executed: list[int] = field(default_factory=list)
+    measured: list[int] = field(default_factory=list)
+    corrected: list[int] = field(default_factory=list)
+    warned: list[int] = field(default_factory=list)
+
+
+@pytest.fixture
+def run_log(
+    workflow: Workflow, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[Action], _Run]:
+    """Records, by slice, what a drift correction does in `workflow.run`."""
+
+    def watch(action: Action) -> _Run:
+        run = _Run()
+        after = TemplateMatchingDrift.after_calculate_drift
+        calculate = TemplateMatching.calculate_drift
+        microscope = workflow.microscope
+        add_beam_shift = microscope.add_beam_shift_with_verification
+        log = action.ctx.text_logger
+        warning = log.warning
+
+        def after_recording(self: TemplateMatchingDrift, slice_number: int) -> None:
+            run.executed.append(action.ctx.slice)
+            after(self, slice_number)
+
+        def calculate_recording(
+            self: TemplateMatching, whole_frame: bool = False
+        ) -> Drift:
+            run.measured.append(action.ctx.slice)
+            return calculate(self, whole_frame)
+
+        def shift_recording(delta: Any, beam: Any = None) -> PositioningOutcome:
+            run.corrected.append(action.ctx.slice)
+            return add_beam_shift(delta, beam)
+
+        def warning_recording(message: str) -> None:
+            run.warned.append(action.ctx.slice)
+            warning(message)
+
+        monkeypatch.setattr(
+            TemplateMatchingDrift, "after_calculate_drift", after_recording
+        )
+        monkeypatch.setattr(TemplateMatching, "calculate_drift", calculate_recording)
+        monkeypatch.setattr(
+            microscope, "add_beam_shift_with_verification", shift_recording
+        )
+        monkeypatch.setattr(log, "warning", warning_recording)
+        return run
+
+    return watch
+
+
+@pytest.mark.parametrize(
+    ("change", "refit"),
+    [
+        (_keep, False),
+        (_change_the_margin, False),
+        (_replace_the_mode_settings, False),
+        (_reset, True),
+        (_forget_the_state, True),
+        (_move_area_of, True),
+        (_add_area_to, True),
+        (_remove_area_of, True),
+        (_change_the_field_width, True),
+    ],
+    ids=[
+        "unchanged",
+        "margin changed",
+        "mode settings replaced",
+        "reset state",
+        "no state",
+        "area moved",
+        "area added",
+        "area removed",
+        "field width",
+    ],
+)
+def test_drift_correction_acquires_templates_instead_of_measuring_when_they_do_not_fit(
+    workflow: Workflow,
+    add_action: Callable[..., Action],
+    run_log: Callable[[Action], _Run],
+    change: Callable[[Action], None],
+    refit: bool,
+) -> None:
+    action = _template_drift_correction(add_action)
+    for each in workflow.actions:
+        each.prepare()
+    change(action)
+    run = run_log(action)
+
+    workflow.run(last_slice=2)
+
+    assert len(run.executed) == 2
+    first, second = run.executed
+    if refit:
+        # the first execution only acquires the templates, the second uses them
+        assert run.measured == [second]
+        assert first not in run.corrected
+        assert first in run.warned
+    else:
+        assert run.measured == run.executed
+        assert not run.warned
+
+
+def test_drift_correction_resumes_from_its_stored_state(
+    workflow: Workflow,
+    add_action: Callable[..., Action],
+    run_log: Callable[[Action], _Run],
+) -> None:
+    action = _template_drift_correction(add_action)
+    for each in workflow.actions:
+        each.prepare()
+    workflow.run(last_slice=1)
+    stored = action.ctx.state_store.read("state.yaml", DriftCorrectionState)
+
+    # as if the workflow were loaded again
+    action.set_state(DriftCorrectionState())
+    action.set_state(stored)
+    run = run_log(action)
+    workflow.run(last_slice=2)
+
+    assert run.measured == run.executed
+    assert not run.warned
+
+
+def test_prepare_stores_the_state_of_the_templates(
+    workflow: Workflow, add_action: Callable[..., Action]
+) -> None:
+    action = _template_drift_correction(add_action)
+
+    action.prepare()
+
+    stored = action.ctx.state_store.read("state.yaml", DriftCorrectionState)
+    assert stored != DriftCorrectionState()
+    assert stored == action.state
+    _ = workflow
+
+
+def test_reset_state_discards_the_state_and_the_templates(
+    workflow: Workflow, add_action: Callable[..., Action]
+) -> None:
+    action = _template_drift_correction(add_action)
+    for each in workflow.actions:
+        each.prepare()
+    store = action.ctx.image_store(Image8Bit)
+    assert store.exists("template_0.tif")
+
+    action.reset_state()
+
+    assert action.state == DriftCorrectionState()
+    stored = action.ctx.state_store.read("state.yaml", DriftCorrectionState)
+    assert stored == DriftCorrectionState()
+    assert not store.exists("template_0.tif")
+    assert action.preparation_issues() == []
+
+
+def test_reset_state_that_cannot_delete_the_templates_still_resets(
+    workflow: Workflow,
+    add_action: Callable[..., Action],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    action = _template_drift_correction(add_action)
+    for each in workflow.actions:
+        each.prepare()
+
+    def locked(*_: object) -> None:
+        raise PermissionError("the template is open elsewhere")
+
+    monkeypatch.setattr(TemplateMatching, "delete_templates", locked)
+    warned: list[str] = []
+    monkeypatch.setattr(action.ctx.text_logger, "warning", warned.append)
+
+    action.reset_state()
+
+    assert action.state == DriftCorrectionState()
+    stored = action.ctx.state_store.read("state.yaml", DriftCorrectionState)
+    assert stored == DriftCorrectionState()
+    assert warned
+
+
+def test_templates_acquired_by_an_update_become_the_state(
+    workflow: Workflow, add_action: Callable[..., Action]
+) -> None:
+    action = _template_drift_correction(add_action)
+    for each in workflow.actions:
+        each.prepare()
+    _move_area_of(action)
+    _mode(action).update_frequency = 1
+
+    # a skipped slice updates the templates of the next one
+    action.carry_over_to_next()
+
+    state = action.state.drift_calculation
+    assert state is not None
+    assert state.areas == _mode(action).areas

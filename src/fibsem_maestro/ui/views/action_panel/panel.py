@@ -89,6 +89,7 @@ class ActionPanel(QWidget):
 
         ui_spec = ui_spec_for(action)
         self._tools: dict[str, ToolSpec] = {tool.key: tool for tool in ui_spec.tools}
+        self._reset_note = ui_spec.reset_note
 
         outer_layout = QVBoxLayout(self)
         outer_layout.setContentsMargins(0, 0, 0, 0)
@@ -248,7 +249,8 @@ class ActionPanel(QWidget):
             "Reset state",
             f"Reset the internal state of '{self._action.name}'?\n\n"
             "This discards the current progress of the action. The settings and the stored "
-            "properties are kept.",
+            "properties are kept."
+            + (f"\n\n{self._reset_note}" if self._reset_note else ""),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
         )

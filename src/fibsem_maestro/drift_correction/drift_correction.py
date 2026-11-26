@@ -10,27 +10,38 @@ from fibsem_maestro.action.state import ActionState
 from fibsem_maestro.core.beam_shift import BeamShift
 from fibsem_maestro.core.image import Image8Bit
 from fibsem_maestro.drift_correction import DRIFT_CALCULATION_MODES
+from fibsem_maestro.drift_correction.drift_calculation_mode import (
+    DriftCalculationMode,
+    DriftCalculationState,
+)
 from fibsem_maestro.drift_correction.error import DriftCorrectionError
 from fibsem_maestro.settings.drift_correction_settings import DriftCorrectionSettings
 
 if TYPE_CHECKING:
     from fibsem_maestro.action_context.action_context import ActionContext
     from fibsem_maestro.core.drift import Drift
-    from fibsem_maestro.drift_correction.drift_calculation_mode import (
-        DriftCalculationMode,
-    )
     from fibsem_maestro.microscope.microscope import Microscope
     from fibsem_maestro.workflow.actions import Actions
 
 
 class DriftCorrectionState(ActionState):
-    pass
+    """
+    Attributes:
+        drift_calculation: The state of the drift calculation mode, e.g. what
+            the templates were acquired for; None if nothing is set up.
+    """
+
+    drift_calculation: DriftCalculationState | None = None
 
 
 @ACTION_REGISTRY.register("drift_correction")
 class DriftCorrection(Action[DriftCorrectionSettings, DriftCorrectionState]):
     """
     Corrects sample drift between slices by applying a compensating beam shift.
+
+    Prepare sets up the drift calculation (e.g. acquires the templates). An
+    execution that finds the setup missing or outdated (e.g. the template
+    areas changed) sets it up anew instead of correcting the drift.
     """
 
     def __init__(
@@ -42,22 +53,29 @@ class DriftCorrection(Action[DriftCorrectionSettings, DriftCorrectionState]):
         actions: Actions,
     ):
         super().__init__(name, microscope, settings, ctx, actions)
-        # set up the drift calculation method
-        self._rebuild()
-        # rebuild whenever the settings change
+        self._drift_calc_name = self._settings.drift_calculation_mode.type
+        self._drift_calc = self._new_drift_calc()
         self._settings.on_change(lambda _: self._rebuild())
 
-    def _rebuild(self) -> None:
-        self._drift_calc_name = self._settings.drift_calculation_mode.type
-        self._drift_calc: DriftCalculationMode = DRIFT_CALCULATION_MODES.get(
-            self._drift_calc_name
-        )(
+    def _new_drift_calc(self) -> DriftCalculationMode:
+        """A drift calculation of the configured mode, with nothing set up."""
+        return DRIFT_CALCULATION_MODES.get(self._drift_calc_name)(
             self._microscope,
             self._settings.drift_calculation_mode,
             self._ctx.image_store(Image8Bit),
             self._ctx.text_logger.derive(self._drift_calc_name),
             self._ctx.image_logger,
         )
+
+    def _rebuild(self) -> None:
+        """Adopt changed settings; the state is kept unless the mode changed."""
+        mode = self._settings.drift_calculation_mode
+        if mode.type == self._drift_calc_name:
+            self._drift_calc.rebuild(mode)
+            return
+        # another mode's state is no use; the next execution sets it up
+        self._drift_calc_name = mode.type
+        self._drift_calc = self._new_drift_calc()
 
     @classmethod
     def settings_cls(cls) -> type[DriftCorrectionSettings]:
@@ -69,10 +87,10 @@ class DriftCorrection(Action[DriftCorrectionSettings, DriftCorrectionState]):
 
     @property
     def state(self) -> DriftCorrectionState:
-        return DriftCorrectionState()
+        return DriftCorrectionState(drift_calculation=self._drift_calc.state)
 
     def set_state(self, state: DriftCorrectionState) -> None:
-        _ = state
+        self._drift_calc.restore(state.drift_calculation)
 
     def carry_over_to_next(self) -> None:
         super().carry_over_to_next()
@@ -85,15 +103,26 @@ class DriftCorrection(Action[DriftCorrectionSettings, DriftCorrectionState]):
         self._drift_calc.setup()
 
     def preparation_issues(self) -> list[str]:
-        issues = self._drift_calc.settings_issues()
-        if not self._drift_calc.is_set_up():
-            issues.append("drift calculation is not set up; press the Prepare button")
-        return issues
+        # missing templates are acquired at the next execution
+        return self._drift_calc.settings_issues()
+
+    def reset_state(self) -> None:
+        """Discard the state, then what the drift calculation stored (e.g. the templates)."""
+        super().reset_state()
+        # the state is reset already, so the next execution sets up anew even
+        # if something stays behind, e.g. a template open in a viewer
+        try:
+            self._drift_calc.discard_setup()
+        except OSError as e:
+            self._ctx.text_logger.warning(
+                f"Could not delete the drift calculation setup of slice "
+                f"{self._ctx.slice}: {e}"
+            )
 
     def initialize_first_slice(self) -> None:
         # copy before the base advances the context, while the store still
         # addresses slice 0; if nothing was set up there is nothing to copy,
-        # and the workflow's preparation check reports it clearly
+        # and the first execution acquires it
         if self._drift_calc.is_set_up():
             store = self._ctx.image_store(Image8Bit)
             self._drift_calc.copy_setup(store, store.next)
@@ -101,17 +130,31 @@ class DriftCorrection(Action[DriftCorrectionSettings, DriftCorrectionState]):
         super().initialize_first_slice()
 
     def _run_step(self) -> StepOutcome:
-        if not self._drift_calc.is_set_up():
-            # the workflow checks this before each slice; this guards direct calls
-            raise DriftCorrectionError(
-                f"'{self.name}' has not been prepared: drift calculation is not set up."
-            )
-
         if self._microscope.beam.scan_rotation != 0:
             raise DriftCorrectionError(
                 "Scan rotation must be zero for drift correction."
             )
 
+        if (reason := self._drift_calc.outdated_setup()) is not None:
+            self._ctx.text_logger.warning(
+                f"{reason[:1].upper()}{reason[1:]}; setting up the drift calculation anew."
+            )
+            self._drift_calc.setup()
+            self._ctx.text_logger.info(
+                "Drift not measured or corrected for this slice: the drift calculation "
+                "was just set up."
+            )
+        else:
+            self._correct_drift()
+
+        if self._settings.grab_frame_after:
+            self._save_result_frame("after_drift_correction")
+
+        self._drift_calc.after_calculate_drift(self._ctx.slice)
+        return Produced(self.collect_properties())
+
+    def _correct_drift(self) -> None:
+        """Measure the drift and correct it, by beam shift or by stage move."""
         self._drift_calc.before_calculate_drift(self._ctx.slice)
 
         beam_shift = self._calculate_correcting_beam_shift()
@@ -124,12 +167,6 @@ class DriftCorrection(Action[DriftCorrectionSettings, DriftCorrectionState]):
             self._microscope.add_beam_shift_with_verification(
                 self._calculate_correcting_beam_shift(after_stage_move=True)
             )
-
-        if self._settings.grab_frame_after:
-            self._save_result_frame("after_drift_correction")
-
-        self._drift_calc.after_calculate_drift(self._ctx.slice)
-        return Produced(self.collect_properties())
 
     def test(self) -> None:
         raise DriftCorrectionError(f"Testing is not implemented for {self.name}")

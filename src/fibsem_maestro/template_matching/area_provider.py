@@ -17,6 +17,7 @@ from fibsem_maestro.settings.template_matching_settings import (
 
 if TYPE_CHECKING:
     from fibsem_maestro.core.image import Image8Bit
+    from fibsem_maestro.core.resolution import Resolution
     from fibsem_maestro.logging.text.text_logger import TextLogger
     from fibsem_maestro.microscope.microscope import Microscope
 
@@ -54,6 +55,16 @@ class AreaProvider(ABC):
         self._microscope = microscope
         self._settings = settings
         self._txt_log = txt_log
+
+    def frame_geometry(self) -> tuple[float, Resolution]:
+        """
+        Return the geometry frames are acquired with now.
+
+        Returns:
+            The field width in nm, and the resolution.
+        """
+        beam = self._microscope.beam
+        return beam.horizontal_field_width, beam.resolution
 
     @property
     @abstractmethod

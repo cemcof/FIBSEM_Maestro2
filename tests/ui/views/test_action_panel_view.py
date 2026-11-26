@@ -38,6 +38,8 @@ from fibsem_maestro.action.registry import ACTION_REGISTRY
 from fibsem_maestro.core.area import RelativeArea
 from fibsem_maestro.core.detail_band import DetailBand
 from fibsem_maestro.core.direction import Direction
+from fibsem_maestro.core.image import Image8Bit
+from fibsem_maestro.core.point import RelativePoint
 from fibsem_maestro.core.registry import Registry
 from fibsem_maestro.milling.milling import MillingState
 from fibsem_maestro.properties.beam_properties import BeamProperties
@@ -51,6 +53,7 @@ from fibsem_maestro.settings.sweeping_settings import LinearSweeping
 from fibsem_maestro.ui.actions_ui import spec as actions_ui_spec
 from fibsem_maestro.ui.actions_ui.default_tools import DEFAULT_TOOLS, TEST_TOOL
 from fibsem_maestro.ui.actions_ui.spec import (
+    ACTION_UI,
     ActionUiSpec,
     SectionContext,
     SectionSpec,
@@ -493,6 +496,33 @@ def test_action_panel_reset_state_button_resets_after_confirmation(
     assert milling.state == MillingState()
     assert milling.ctx.state_store.read("state.yaml", MillingState) == MillingState()
     # nothing left to reset
+    assert not reset.isEnabled()
+
+
+def test_action_panel_reset_of_drift_correction_says_the_templates_go_too(
+    app: Composition, boxes: MessageBoxes
+) -> None:
+    drift = app.commands.add_action("drift_correction", "drift")
+    drift.settings.drift_calculation_mode.areas = [
+        RelativeArea(origin=RelativePoint(0.4, 0.4), width=0.2, height=0.2)
+    ]
+    drift.prepare()
+    milling = _milling_with_progress(app)
+    for action in (drift, milling):
+        shown(app, action)
+    # the state of the templates is all there is to discard
+    reset = panel_of(app, drift).header.reset_button
+    assert reset.isEnabled()
+
+    reset.click()
+    panel_of(app, milling).header.reset_button.click()
+
+    note = ACTION_UI.get("drift_correction").reset_note
+    assert note is not None
+    drift_text, milling_text = boxes.texts()
+    assert note in drift_text
+    assert note not in milling_text
+    assert not drift.ctx.image_store(Image8Bit).exists("template_0.tif")
     assert not reset.isEnabled()
 
 
